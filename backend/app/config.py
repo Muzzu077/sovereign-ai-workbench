@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     """Global application settings loaded from environment variables or .env file."""
 
     app_name: str = "Sovereign AI Workbench"
-    app_version: str = "0.2.0"
+    app_version: str = "0.5.0"
     debug: bool = False
 
     # Paths
@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Audit
     audit_log_file: Path = Path("data/audit.log")
 
+    # --- Document Intelligence ---
+    upload_dir: Path = Path("data/uploads")
+    max_upload_size: int = 50 * 1024 * 1024       # 50 MB
+    max_pdf_pages: int = 200
+    max_extracted_characters: int = 500_000        # 500 K chars
+    allowed_extensions: list[str] = ["txt", "pdf", "docx"]
+
     # --- Local LLM provider ---
     llm_provider: str = "llama_cpp"
     llm_base_url: str = "http://127.0.0.1:8080"
@@ -39,6 +46,13 @@ class Settings(BaseSettings):
     llm_mmproj_path: str = "models/mmproj-gemma-3-4b-it-f16.gguf"
     llm_timeout: int = 120
     llm_enabled: bool = True
+
+    # --- Knowledge Base & RAG ---
+    chunk_size: int = 800
+    chunk_overlap: int = 100
+    min_chunk_size: int = 50
+    embedding_dimension: int = 512
+    retrieval_top_k: int = 5
 
     model_config = {
         "env_prefix": "SAW_",
