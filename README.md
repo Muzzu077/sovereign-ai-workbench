@@ -20,41 +20,56 @@ The system is designed to support:
 - Full audit logging and execution traces
 - Visible proof of air-gap compliance (no external network calls)
 
-## Current Architecture (Foundation Phase)
+## Current Architecture (v0.5.0 — Knowledge Base & RAG)
 
 ```
-User
-  ↓
-REST API (FastAPI)
-  ↓
-Agent Orchestrator
-  ↓
-Model Registry → Model Provider (abstract)
-  ↓
-DummyLocalModel (placeholder)
-  ↓
-Structured Response + Audit Record
+User / Client
+  │
+  ├─► POST /files/upload ──► DocumentStore ──► ProcessorRegistry ──► Document
+  │                                                  │
+  │                                     ┌────────────┼────────────┐
+  │                                     ▼            ▼            ▼
+  │                                TxtProcessor PdfProcessor DocxProcessor
+  │                                                  │
+  │                                                  ▼ (if scanned / empty text)
+  │                                            OcrProcessor (Tesseract)
+  │
+  ├─► POST /knowledge/ingest/{id} ──► ChunkingService ──► TF-IDF Embeddings
+  │                                          │                    │
+  │                                          ▼                    ▼
+  │                                   KnowledgeChunks      InMemoryVectorStore
+  │
+  ├─► POST /knowledge/search ──► KnowledgeRetriever ──► ranked chunks + provenance
+  │
+  ├─► POST /knowledge/query ──► RAGService ──► retrieve → prompt → local LLM → answer + citations
+  │
+  ├─► POST /documents/{id}/analyze ──► DocumentStore ──► Local LLM (Gemma 3 via llama.cpp)
+  │
+  └─► POST /agent/run ──► Agent Orchestrator ──► Model Registry ──► Local Model
+                              │
+                              └─► knowledge_search tool ──► KnowledgeRetriever
 ```
 
 ### Key Components
 
 | Module | Role |
 |---|---|
-| `backend/app/main.py` | FastAPI application entry point, lifecycle, route wiring |
-| `backend/app/config.py` | Centralized settings via pydantic-settings |
-| `backend/app/models/base.py` | Abstract `ModelProvider` interface |
-| `backend/app/models/registry.py` | `ModelRegistry` — register and look up models by category |
-| `backend/app/models/local.py` | `DummyLocalModel` — placeholder for testing |
-| `backend/app/agents/orchestrator.py` | `AgentOrchestrator` — task → model → result pipeline |
-| `backend/app/agents/planner.py` | `TaskPlanner` stub — future multi-step planning |
-| `backend/app/agents/router.py` | `TaskRouter` stub — future task-to-model routing |
-| `backend/app/api/agent.py` | `POST /agent/run` endpoint |
-| `backend/app/api/models.py` | `GET /models/` endpoint |
-| `backend/app/api/files.py` | Files API stub |
-| `backend/app/security/audit.py` | `AuditService` — JSON-lines audit logging |
-| `backend/app/security/network_monitor.py` | Network monitor stub |
-| `backend/app/tools/` | Tool stubs (file, OCR, RAG, code, document) |
-| `backend/app/knowledge/` | Knowledge ingestion and retrieval stubs |
+| `backend/app/main.py` | FastAPI entry point; wires document + knowledge subsystems |
+| `backend/app/config.py` | Settings incl. chunk_size/overlap, embedding_dimension, retrieval_top_k |
+| `backend/app/documents/*` | Document Intelligence (TXT/PDF/DOCX/OCR, DocumentStore) |
+| `backend/app/knowledge/models.py` | `KnowledgeDocument`, `KnowledgeChunk`, `RetrievalResult`, `Citation`, `RAGResponse` |
+| `backend/app/knowledge/chunking.py` | Paragraph/sentence chunking with page/section provenance |
+| `backend/app/knowledge/embeddings.py` | `EmbeddingProvider` ABC (swap-in for neural embeddings later) |
+| `backend/app/knowledge/tfidf_embeddings.py` | Local TF-IDF embeddings via scikit-learn (no network/GPU) |
+| `backend/app/knowledge/memory_store.py` | In-process vector store (numpy cosine similarity) |
+| `backend/app/knowledge/ingestion.py` | Chunk → embed → index pipeline with duplicate prevention |
+| `backend/app/knowledge/retrieval.py` | Query embedding + ranked retrieval with provenance |
+| `backend/app/knowledge/citations.py` | Citation builder (dedupe by filename/page/section) |
+| `backend/app/knowledge/rag_service.py` | Retrieve → grounded prompt → local LLM → answer + citations |
+| `backend/app/api/knowledge.py` | Ingest / search / query / list / delete knowledge endpoints |
+| `backend/app/tools/rag_tool.py` | `knowledge_search` agent tool |
+| `backend/app/models/llama_cpp_provider.py` | Local-only llama.cpp provider with air-gap enforcement |
+| `backend/app/security/audit.py` | Audit logging (metadata only; no chunk/document text) |
 
 ## Getting Started
 
@@ -91,6 +106,16 @@ The API will be available at `http://localhost:8000`.
 - Health: `GET /health`
 - Run agent: `POST /agent/run`
 - List models: `GET /models/`
+- Upload document: `POST /files/upload`
+- List uploaded documents: `GET /files/`
+- Get document details: `GET /files/{id}`
+- Delete document: `DELETE /files/{id}`
+- Analyze document: `POST /documents/{id}/analyze`
+- Ingest into knowledge base: `POST /knowledge/ingest/{document_id}`
+- Search knowledge: `POST /knowledge/search`
+- RAG query: `POST /knowledge/query`
+- List knowledge docs: `GET /knowledge/documents`
+- Delete knowledge doc: `DELETE /knowledge/documents/{document_id}`
 - API docs: `GET /docs`
 
 ### Run Tests
@@ -115,6 +140,59 @@ pytest -v
 curl http://localhost:8000/health
 ```
 
+### Upload a Document (TXT, PDF, DOCX)
+
+```bash
+curl -X POST http://localhost:8000/files/upload \
+  -F "file=@/path/to/safety_report.pdf"
+```
+
+Response:
+```json
+{
+  "id": "a1b2c3d4-...",
+  "filename": "safety_report.pdf",
+  "file_type": "pdf",
+  "size_bytes": 1048576,
+  "status": "text_extracted",
+  "page_count": 5,
+  "character_count": 12400,
+  "has_ocr_content": false,
+  "created_at": "2026-09-08T12:00:00Z"
+}
+```
+
+### Analyze Document via Local LLM
+
+```bash
+curl -X POST http://localhost:8000/documents/a1b2c3d4-.../analyze \
+  -H "Content-Type: application/json" \
+  -d '{"instruction": "Focus on critical safety hazards and immediate remediation steps."}'
+```
+
+Response:
+```json
+{
+  "document_id": "a1b2c3d4-...",
+  "filename": "safety_report.pdf",
+  "model_used": "gemma-3-4b-it",
+  "summary": "The document outlines inspection results for Unit 4 turbine bearings...",
+  "key_findings": [
+    "Vibration level exceeds baseline by 34%",
+    "Lubrication oil contamination detected in sample B"
+  ],
+  "risks": [
+    "High risk of bearing seizure if operated continuously above 3000 RPM"
+  ],
+  "action_items": [
+    "Schedule emergency bearing inspection within 48 hours",
+    "Replace oil filter and flush lubrication lines"
+  ],
+  "raw_response": "...",
+  "execution_time_ms": 420.5
+}
+```
+
 ### Run Agent Task
 
 ```bash
@@ -123,35 +201,72 @@ curl -X POST http://localhost:8000/agent/run \
   -d '{"task": "Analyze an inspection report"}'
 ```
 
+### Ingest Document into Knowledge Base
+
+```bash
+curl -X POST http://localhost:8000/knowledge/ingest/a1b2c3d4-...
+```
+
+### Search Knowledge Base
+
+```bash
+curl -X POST http://localhost:8000/knowledge/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "vibration threshold bearing", "top_k": 5}'
+```
+
+### RAG Query (retrieve + local LLM answer + citations)
+
+```bash
+curl -X POST http://localhost:8000/knowledge/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What PPE is required for maintenance?", "top_k": 5}'
+```
+
+## Knowledge Base & RAG Pipeline
+
+1. **Chunking**: Paragraph/sentence-aware splits (`chunk_size=800`, `overlap=100`) with page/section provenance and deterministic chunk IDs.
+2. **Embeddings**: Local TF-IDF via scikit-learn (`TfidfEmbeddingProvider`, default 512 dims). No model download, no GPU, no network. `EmbeddingProvider` ABC allows drop-in replacement with sentence-transformers later.
+3. **Vector store**: `InMemoryVectorStore` — numpy cosine similarity, in-process only.
+4. **Ingestion**: Document → chunk → embed → index; duplicate prevention and force re-index.
+5. **Retrieval**: Query embed → top-k ranked chunks with filename/page/section provenance.
+6. **Citations**: Deduplicated by `(filename, page, section)`.
+7. **RAG**: Grounded prompt → Gemma 3 (llama.cpp) or DummyLocalModel → answer + citations; insufficient-evidence handling when KB is empty.
+
+## Supported Document Formats & Pipeline
+
+- **Plain Text (`.txt`)**: UTF-8 and Latin-1 support with character truncation controls.
+- **PDF (`.pdf`)**: Native text extraction via `pypdf` with per-page tracking; automatic fallback to OCR for scanned/image-only PDFs.
+- **Word (`.docx`)**: Structured paragraph extraction and document core properties metadata via `python-docx`.
+- **Scanned Documents (OCR)**: Local OCR using Tesseract 5.x and `pdf2image` (Poppler) preserving per-page confidence scores. Zero external API calls.
+
+## Security & Privacy Controls
+
+- **Air-Gap Enforcement**: `LlamaCppProvider` strictly rejects non-loopback URLs (`127.0.0.1`, `localhost`, `[::1]`).
+- **Local-only embeddings/store**: TF-IDF and in-memory vector store require zero network.
+- **File Ingestion Security**: Path traversal prevention (`sanitize_filename`), file size limits (50 MB default), PDF page limits (200 pages default), character extraction limits (500k chars default), and extension whitelist enforcement.
+- **Audit Logging**: Uploads, ingest, query, and delete are logged as metadata only — never chunk/document body text.
+
 ## Current Limitations
 
-This is the **foundation phase**. The following are **intentionally not implemented yet**:
-
-- Real open-weight model integration (Ollama, vLLM, llama.cpp)
-- Multi-step agentic reasoning and planning
-- Intelligent task-to-model routing
-- File upload and management
-- OCR processing
-- RAG / document search
+- TF-IDF is lexical (no paraphrase/cross-lingual semantics); neural embeddings deferred until offline install is available.
+- Vector store is in-memory only (not durable across restarts).
+- Multi-step agentic planning with automatic tool invocation
 - Sandboxed code execution
-- Document generation (DOCX, PPTX, XLSX)
-- Knowledge base ingestion
-- Network monitoring / air-gap verification
-- Authentication and authorization
-- Frontend UI
-- Docker deployment
-- Database-backed audit trails
+- Document generation (export to DOCX, PPTX, XLSX)
+- Multimodal vision model integration (direct image tokens)
+- Web-based frontend UI
+- Role-based access control and authentication
 
 ## Future Phases
 
-1. **Model Integration** — Connect real open-weight models via Ollama/vLLM
-2. **Tool Implementation** — File I/O, OCR, code execution, document generation
-3. **RAG Pipeline** — Document ingestion, embedding, semantic retrieval
-4. **Agentic Planning** — Multi-step task decomposition and execution
-5. **Multimodal Support** — Image/drawing understanding via vision models
-6. **Security Hardening** — Network monitoring, air-gap proof, auth
-7. **Frontend** — Web UI for task submission and result viewing
-8. **Deployment** — Docker, on-premise packaging, air-gapped install
+1. **Neural Embeddings** — Offline sentence-transformers when network/packages allow
+2. **Persistent Vector Store** — Disk-backed local index
+3. **Agentic Planning** — Multi-step task decomposition and tool use
+4. **Multimodal Support** — Image/drawing understanding via vision models
+5. **Security Hardening** — Network monitoring, air-gap proof, auth
+6. **Frontend** — Web UI for task submission and result viewing
+7. **Deployment** — Docker, on-premise packaging, air-gapped install
 
 ## License
 
