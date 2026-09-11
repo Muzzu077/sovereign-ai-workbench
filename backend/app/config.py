@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     """Global application settings loaded from environment variables or .env file."""
 
     app_name: str = "Sovereign AI Workbench"
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     debug: bool = False
 
     # Paths
