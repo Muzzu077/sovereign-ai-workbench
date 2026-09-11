@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     min_chunk_size: int = 50
     embedding_dimension: int = 512
     retrieval_top_k: int = 5
+    similarity_threshold: float = 0.05
+    max_context_chars: int = 5000
+
+    # --- Embedding provider ---
+    embedding_provider: str = "tfidf"
+    embedding_version: int = 1
+
+    # --- Persistence ---
+    knowledge_db_path: Path = Path("data/knowledge_base/knowledge.db")
+    vector_storage_path: Path = Path("data/knowledge_base/vectors")
 
     model_config = {
         "env_prefix": "SAW_",

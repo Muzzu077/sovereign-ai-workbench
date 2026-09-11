@@ -9,7 +9,7 @@ Design:
 - Uses TfidfVectorizer with sublinear TF, L2 normalization,
   and configurable max features (dimensionality).
 - The vocabulary is built from all texts added via fit() or
-  incrementally via partial_fit_texts().
+  incrementally via partial_fit().
 - Once fitted, embed() and embed_batch() produce dense numpy
   vectors suitable for cosine similarity search.
 
@@ -32,6 +32,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from app.knowledge.embeddings import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
+
+_TFIDF_VERSION = 1
 
 
 class TfidfEmbeddingProvider(EmbeddingProvider):
@@ -85,13 +87,14 @@ class TfidfEmbeddingProvider(EmbeddingProvider):
         detect this and relax the thresholds automatically.
         """
         n = len(corpus)
-        min_df = self._min_df
-        max_df = self._max_df
-
-        # For tiny corpora, disable frequency filtering entirely
-        if n <= 2:
+        # Always disable frequency filtering for small corpora (<= 10 docs)
+        # to ensure vocabulary terms are retained across incremental reloads
+        if n <= 10:
             min_df = 1
             max_df = 1.0
+        else:
+            min_df = self._min_df
+            max_df = self._max_df
 
         self._vectorizer = self._make_vectorizer(min_df, max_df)
         self._vectorizer.fit(corpus)
@@ -172,6 +175,12 @@ class TfidfEmbeddingProvider(EmbeddingProvider):
 
     def get_name(self) -> str:
         return f"tfidf-{self._max_features}"
+
+    def get_version(self) -> int:
+        return _TFIDF_VERSION
+
+    def get_model_name(self) -> str:
+        return ""
 
     def vocabulary_size(self) -> int:
         """Return the actual vocabulary size after fitting."""

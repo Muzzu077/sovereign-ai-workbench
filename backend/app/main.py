@@ -36,7 +36,8 @@ from app.documents.docx_processor import DocxProcessor
 from app.documents.store import DocumentStore
 from app.knowledge.chunking import ChunkingConfig, ChunkingService
 from app.knowledge.tfidf_embeddings import TfidfEmbeddingProvider
-from app.knowledge.memory_store import InMemoryVectorStore
+from app.knowledge.persistence import KnowledgeMetadataStore
+from app.knowledge.persistent_store import PersistentVectorStore
 from app.knowledge.ingestion import KnowledgeIngestionService
 from app.knowledge.retrieval import KnowledgeRetriever
 from app.knowledge.rag_service import RAGService
@@ -59,7 +60,6 @@ def _build_tool_registry(settings) -> ToolRegistry:
 
     # File reader — uses the configured data directory as workspace root.
     workspace = settings.data_dir
-    # Ensure the workspace directory exists.
     workspace.mkdir(parents=True, exist_ok=True)
     tool_registry.register(FileReaderTool(workspace_root=workspace))
 
@@ -94,7 +94,7 @@ def create_app() -> FastAPI:
     processor_registry = _build_processor_registry()
     document_store = DocumentStore(upload_dir=settings.upload_dir)
 
-    # Knowledge subsystem components (created once, wired during lifespan)
+    # Knowledge subsystem components with persistence
     chunking_config = ChunkingConfig(
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
@@ -104,16 +104,21 @@ def create_app() -> FastAPI:
     embedding_provider = TfidfEmbeddingProvider(
         max_features=settings.embedding_dimension,
     )
-    vector_store = InMemoryVectorStore()
+    meta_store = KnowledgeMetadataStore(db_path=settings.knowledge_db_path)
+    vector_store = PersistentVectorStore(storage_dir=settings.vector_storage_path)
+
     ingestion_service = KnowledgeIngestionService(
         chunking_service=chunking_service,
         embedding_provider=embedding_provider,
         vector_store=vector_store,
+        metadata_store=meta_store,
     )
     retriever = KnowledgeRetriever(
         embedding_provider=embedding_provider,
         vector_store=vector_store,
         ingestion_service=ingestion_service,
+        default_top_k=settings.retrieval_top_k,
+        similarity_threshold=settings.similarity_threshold,
     )
     knowledge_search_tool = KnowledgeSearchTool(retriever=retriever)
 
@@ -156,6 +161,7 @@ def create_app() -> FastAPI:
         rag_service = RAGService(
             retriever=retriever,
             model_provider=model_provider,
+            default_similarity_threshold=settings.similarity_threshold,
         )
 
         # Store on app.state for dependency injection in routes
@@ -166,6 +172,7 @@ def create_app() -> FastAPI:
         app.state.audit_service = audit_service
         app.state.processor_registry = processor_registry
         app.state.document_store = document_store
+        app.state.knowledge_metadata = meta_store
         app.state.knowledge_ingestion = ingestion_service
         app.state.knowledge_retriever = retriever
         app.state.rag_service = rag_service
@@ -182,6 +189,8 @@ def create_app() -> FastAPI:
             type(vector_store).__name__,
         )
         yield
+        # Clean shutdown: close metadata store
+        meta_store.close()
         logger.info("Sovereign AI Workbench shutting down")
 
     app = FastAPI(

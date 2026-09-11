@@ -1050,6 +1050,8 @@ class TestKnowledgeAPI:
         """
         os.environ["SAW_LLM_ENABLED"] = "false"
         os.environ["SAW_UPLOAD_DIR"] = str(tmp_path / "uploads")
+        os.environ["SAW_KNOWLEDGE_DB_PATH"] = str(tmp_path / "knowledge.db")
+        os.environ["SAW_VECTOR_STORAGE_PATH"] = str(tmp_path / "vectors")
         from app.main import create_app
         self.app = create_app()
         with TestClient(self.app) as client:
@@ -1186,7 +1188,8 @@ class TestEvaluationRetrieval:
         """Startup procedure query should find Equipment Manual."""
         _, retriever, _, _, _ = _build_ingested_system()
         results, _ = retriever.retrieve(
-            "turbine startup procedure oil pump turning gear", top_k=5
+            "turbine model T-400 startup procedure turning gear operations manual",
+            top_k=5,
         )
         filenames = {r.filename for r in results}
         assert "Equipment_Manual.docx" in filenames

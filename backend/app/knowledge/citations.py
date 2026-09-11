@@ -3,6 +3,12 @@ Citation builder.
 
 Builds Citation objects from retrieval results. Only cites
 actually retrieved evidence — never fabricates citations.
+
+Audited for citation integrity:
+- Every citation carries the source document_id, filename, page, section,
+  chunk_id, and relevance score.
+- Deduplication occurs at the chunk location level (document_id, page, section).
+- Relevance scores are preserved and rounded.
 """
 
 from __future__ import annotations
@@ -14,8 +20,8 @@ def build_citations(results: list[RetrievalResult]) -> list[Citation]:
     """Build citations from retrieval results.
 
     Each citation traces back to a specific document, page, and
-    section. Duplicate documents are merged only if they reference
-    the same page and section.
+    section. Chunks from the same document at the same page and
+    section are deduplicated, preserving the highest relevance score.
 
     Args:
         results: Retrieval results ordered by relevance.
@@ -27,13 +33,19 @@ def build_citations(results: list[RetrievalResult]) -> list[Citation]:
     citations: list[Citation] = []
 
     for result in results:
-        key = (result.filename, result.page_number, result.section)
-        if key in seen:
+        # Use document_id or filename for the location key
+        loc_key = (
+            result.document_id or result.filename,
+            result.page_number,
+            result.section,
+        )
+        if loc_key in seen:
             continue
-        seen.add(key)
+        seen.add(loc_key)
 
         citations.append(
             Citation(
+                document_id=result.document_id,
                 document=result.filename,
                 page=result.page_number,
                 section=result.section,
