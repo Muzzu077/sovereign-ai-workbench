@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     """Global application settings loaded from environment variables or .env file."""
 
     app_name: str = "Sovereign AI Workbench"
-    app_version: str = "0.6.0"
+    app_version: str = "0.6.1"
     debug: bool = False
 
     # Paths
@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     # --- Persistence ---
     knowledge_db_path: Path = Path("data/knowledge_base/knowledge.db")
     vector_storage_path: Path = Path("data/knowledge_base/vectors")
+    document_db_path: Path = Path("data/documents.db")
 
     model_config = {
         "env_prefix": "SAW_",

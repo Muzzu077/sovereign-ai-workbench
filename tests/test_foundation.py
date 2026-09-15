@@ -9,6 +9,7 @@ Covers:
 - POST /agent/run API
 """
 
+import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,8 +25,13 @@ from app.agents.orchestrator import AgentOrchestrator
 
 
 @pytest.fixture()
-def client() -> TestClient:
-    """Create a test client with the full FastAPI app."""
+def client(tmp_path) -> TestClient:
+    """Create a test client with the full FastAPI app (isolated paths)."""
+    os.environ["SAW_DOCUMENT_DB_PATH"] = str(tmp_path / "documents.db")
+    os.environ["SAW_UPLOAD_DIR"] = str(tmp_path / "uploads")
+    os.environ["SAW_KNOWLEDGE_DB_PATH"] = str(tmp_path / "knowledge.db")
+    os.environ["SAW_VECTOR_STORAGE_PATH"] = str(tmp_path / "vectors")
+    os.environ["SAW_AUDIT_LOG_FILE"] = str(tmp_path / "audit.log")
     app = create_app()
     with TestClient(app) as c:
         yield c

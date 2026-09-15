@@ -17,10 +17,10 @@ The system is designed to support:
 - Optical Character Recognition (OCR) for scanned documents via local Tesseract
 - Multimodal understanding (drawings, schematics, photos)
 - Generation of deliverables (DOCX, PPTX, XLSX)
-- Tamper-evident audit logging, latency breakdown, and execution traces
+- Append-only audit logging, latency breakdown, and execution traces
 - Verified air-gap compliance (strictly zero external network calls)
 
-## Current Architecture (v0.6.0 — Hardened Knowledge Base & RAG)
+## Current Architecture (v0.6.1 — Production Hardened Knowledge Base & RAG)
 
 ```
 User / Client / Industrial Agent
@@ -63,11 +63,11 @@ User / Client / Industrial Agent
 | Module | Role |
 |---|---|
 | `backend/app/main.py` | FastAPI entry point; wires persistent storage, document processors, knowledge services, and agent registries |
-| `backend/app/config.py` | Central configuration with persistent paths (`SAW_KNOWLEDGE_DB_PATH`, `SAW_VECTOR_STORAGE_PATH`), chunking settings, and retrieval thresholds |
-| `backend/app/documents/*` | Document Intelligence (TXT/PDF/DOCX/OCR, DocumentStore, sanitization) |
+| `backend/app/config.py` | Central configuration with persistent paths (`SAW_KNOWLEDGE_DB_PATH`, `SAW_VECTOR_STORAGE_PATH`, `SAW_DOCUMENT_DB_PATH`), chunking settings, and retrieval thresholds |
+| `backend/app/documents/*` | Document Intelligence (TXT/PDF/DOCX/OCR, DocumentStore with SQLite persistence, sanitization) |
 | `backend/app/knowledge/models.py` | Domain models (`KnowledgeDocument`, `KnowledgeChunk`, `EvidenceQuality`, `EmbeddingConfig`, `RAGMetrics`, `Citation`, `RAGResponse`) |
 | `backend/app/knowledge/persistence.py` | `KnowledgeMetadataStore` — SQLite-backed metadata persistence in WAL mode with foreign key cascade, indexing, and embedding fingerprint tracking |
-| `backend/app/knowledge/persistent_store.py` | `PersistentVectorStore` — NumPy `.npz` vector matrix storage + metadata persistence surviving restarts |
+| `backend/app/knowledge/persistent_store.py` | `PersistentVectorStore` — generation-consistent NumPy `.npz` vector storage with integrity manifests, checksum validation, and fail-closed corruption handling |
 | `backend/app/knowledge/chunking.py` | Paragraph/sentence chunking with page/section provenance and deterministic chunk hashes |
 | `backend/app/knowledge/embeddings.py` | `EmbeddingProvider` ABC with explicit versioning and `EmbeddingConfig` compatibility |
 | `backend/app/knowledge/tfidf_embeddings.py` | Local TF-IDF embeddings via scikit-learn (512 dims, zero network, zero GPU) |
@@ -79,7 +79,8 @@ User / Client / Industrial Agent
 | `backend/app/api/knowledge.py` | Knowledge API endpoints for ingestion, search, query, listing, and deletion |
 | `backend/app/tools/rag_tool.py` | `knowledge_search` agent tool for the orchestrator |
 | `backend/app/models/llama_cpp_provider.py` | Local-only llama.cpp provider with air-gap loopback enforcement |
-| `backend/app/security/audit.py` | Tamper-evident audit logging (metadata only; never logs raw chunk or document bodies) |
+| `backend/app/security/audit.py` | Append-only structured audit logging (metadata only; never logs raw chunk or document bodies). NOT tamper-evident — see docstring |
+| `backend/app/security/network_monitor.py` | Air-gap compliance verification — validates all configured endpoints are loopback-only |
 
 ## Getting Started
 
@@ -154,7 +155,7 @@ Response:
 {
   "status": "healthy",
   "timestamp": "2026-09-11T12:00:00Z",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "models_registered": ["general"],
   "tools_registered": ["calculator", "file_reader"],
   "document_processors": [".txt", ".pdf", ".docx"],
@@ -242,7 +243,7 @@ Response:
 ## Hardened Knowledge Base & RAG Architecture
 
 1. **Persistent SQLite Metadata**: `knowledge.db` stores document statuses (`PROCESSING`, `INDEXED`, `FAILED`, `STALE`), chunk spans, page numbers, sections, hashes, and embedding fingerprints with WAL mode enabled.
-2. **Persistent NumPy Vectors**: `PersistentVectorStore` manages dense embedding matrices stored as `.npz` with corresponding metadata mappings, atomic file writes, and corrupted storage recovery.
+2. **Persistent NumPy Vectors**: `PersistentVectorStore` manages dense embedding matrices using a generation-consistent storage model with integrity manifests, SHA-256 checksums, and fail-closed corruption handling. Corrupted storage is never silently converted to empty state.
 3. **Deterministic Deduplication**: Ingestion computes SHA-256 text hashes. Duplicate uploads skip re-embedding; modified documents purge stale vectors before re-indexing.
 4. **Embedding Versioning & Fingerprinting**: `EmbeddingConfig` captures provider name, model identifier, version, and dimension. Any incompatible embedding change triggers automatic marking of documents as `STALE`.
 5. **Retrieval Thresholding & Quality Classification**:
@@ -252,13 +253,15 @@ Response:
    - `STRONG_EVIDENCE`: Multiple independent chunks exhibit high similarity scores.
 6. **Citation Provenance Integrity**: Citations strictly reference actual chunks retrieved and included in the prompt, deduplicated by `(filename, page, section)`.
 7. **Synthetic Evaluation Testbed**: `backend/app/knowledge/evaluation.py` provides deterministic regression benchmarks verifying Recall@K and Precision@K on industrial SOPs and manuals.
+8. **Restart-Safe Document Store**: `DocumentMetadataStore` persists document metadata to SQLite, enabling the `DocumentStore` to reconstruct its registry after process restarts without loading full document text into memory.
+9. **Network Compliance Verification**: `NetworkMonitor` validates all configured endpoints against the loopback allowlist at startup, providing visible proof of air-gap compliance in the health endpoint.
 
 ## Security & Privacy Controls
 
-- **Air-Gap Enforcement**: `LlamaCppProvider` strictly accepts only loopback URLs (`127.0.0.1`, `localhost`, `[::1]`). External addresses and cloud endpoints are rejected at instantiation.
+- **Air-Gap Enforcement**: `LlamaCppProvider` strictly accepts only loopback URLs (`127.0.0.1`, `localhost`, `[::1]`). External addresses and cloud endpoints are rejected at instantiation. `NetworkMonitor` independently verifies all endpoint configurations at startup.
 - **Strictly Local Vectors & Embeddings**: All embeddings (TF-IDF), vector computations (NumPy), and metadata storage (SQLite) operate entirely in-process and on-disk without network calls.
 - **Path Traversal Protection**: All file operations enforce workspace boundaries and sanitized filenames.
-- **Audit Logging**: Uploads, ingestions, RAG queries, and deletions record metadata, timestamps, and run identifiers. Document text and chunk bodies are never written to audit logs.
+- **Audit Logging**: Uploads, ingestions, RAG queries, and deletions record metadata, timestamps, and run identifiers. Document text and chunk bodies are never written to audit logs. NOTE: The current audit log is append-only but NOT tamper-evident (no hash chaining). True tamper-evidence is planned for a future phase.
 
 ## Current Limitations
 

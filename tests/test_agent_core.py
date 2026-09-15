@@ -834,9 +834,15 @@ class TestOrchestratorWithLlamaCppMocked:
 
 class TestAgentRunAPIStructure:
     @pytest.fixture()
-    def client(self):
+    def client(self, tmp_path):
+        import os
         from fastapi.testclient import TestClient
         from app.main import create_app
+        os.environ["SAW_DOCUMENT_DB_PATH"] = str(tmp_path / "documents.db")
+        os.environ["SAW_UPLOAD_DIR"] = str(tmp_path / "uploads")
+        os.environ["SAW_KNOWLEDGE_DB_PATH"] = str(tmp_path / "knowledge.db")
+        os.environ["SAW_VECTOR_STORAGE_PATH"] = str(tmp_path / "vectors")
+        os.environ["SAW_AUDIT_LOG_FILE"] = str(tmp_path / "audit.log")
         app = create_app()
         with TestClient(app) as c:
             yield c

@@ -2,8 +2,15 @@
 Audit service.
 
 Records every agent execution with timestamp, task, selected model,
-and execution status. Currently writes to a JSON-lines file.
-Will be extended to support database-backed audit trails later.
+and execution status. Writes to a JSON-lines file with append-only
+semantics.
+
+Terminology note: This is an *append-only structured audit log*,
+NOT a tamper-evident log.  True tamper-evidence requires cryptographic
+hash chaining (each record hashing the previous record's digest) or
+a Merkle tree.  That is planned for a future phase.  Until then,
+this log provides traceability and accountability but NOT tamper
+detection.
 """
 
 import json
@@ -29,16 +36,35 @@ class AuditRecord(BaseModel):
 
 class AuditService:
     """
-    Lightweight audit logger.
+    Append-only structured audit logger.
 
     Appends structured JSON records to a log file so that every
-    agentic execution is traceable. In future phases this will be
-    backed by a database and exposed via an admin API.
+    agentic execution is traceable.  Provides accountability and
+    post-incident review capability.
+
+    NOTE: This implementation does NOT provide tamper-evidence.
+    Records can be edited or deleted by anyone with file access.
+    True tamper-evident logging (hash-chained records) is planned
+    for a future phase.
+
+    In future phases this will be backed by a database and exposed
+    via an admin API.
     """
 
     def __init__(self, log_file: Path | None = None) -> None:
         self._log_file = log_file or Path("data/audit.log")
         self._log_file.parent.mkdir(parents=True, exist_ok=True)
+        self._record_count: int = 0
+
+    @property
+    def log_file(self) -> Path:
+        """Return the path to the audit log file."""
+        return self._log_file
+
+    @property
+    def record_count(self) -> int:
+        """Return the number of records written in this session."""
+        return self._record_count
 
     def record(
         self,
@@ -74,6 +100,7 @@ class AuditService:
         try:
             with open(self._log_file, "a", encoding="utf-8") as f:
                 f.write(record.model_dump_json() + "\n")
+            self._record_count += 1
         except OSError:
             logger.exception("Failed to write audit record to %s", self._log_file)
 
@@ -98,3 +125,19 @@ class AuditService:
         except (OSError, json.JSONDecodeError):
             logger.exception("Failed to read audit log")
             return []
+
+    def get_health(self) -> dict[str, object]:
+        """Return audit subsystem health."""
+        writable = True
+        try:
+            # Test that we can still append
+            self._log_file.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            writable = False
+
+        return {
+            "status": "healthy" if writable else "degraded",
+            "log_file": str(self._log_file),
+            "session_records": self._record_count,
+            "tamper_evident": False,  # Explicitly declare: no hash chaining
+        }

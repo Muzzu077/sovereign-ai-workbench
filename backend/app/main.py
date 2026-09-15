@@ -24,6 +24,7 @@ from app.models.registry import ModelRegistry
 from app.models.local import DummyLocalModel
 from app.models.llama_cpp_provider import LlamaCppProvider
 from app.security.audit import AuditService
+from app.security.network_monitor import NetworkMonitor
 from app.tools.registry import ToolRegistry
 from app.tools.calculator import CalculatorTool
 from app.tools.file_reader import FileReaderTool
@@ -34,6 +35,7 @@ from app.documents.txt_processor import TxtProcessor
 from app.documents.pdf_processor import PdfProcessor
 from app.documents.docx_processor import DocxProcessor
 from app.documents.store import DocumentStore
+from app.documents.persistence import DocumentMetadataStore
 from app.knowledge.chunking import ChunkingConfig, ChunkingService
 from app.knowledge.tfidf_embeddings import TfidfEmbeddingProvider
 from app.knowledge.persistence import KnowledgeMetadataStore
@@ -92,7 +94,18 @@ def create_app() -> FastAPI:
     tool_registry = _build_tool_registry(settings)
     verifier_registry = _build_verifier_registry()
     processor_registry = _build_processor_registry()
-    document_store = DocumentStore(upload_dir=settings.upload_dir)
+    document_meta_store = DocumentMetadataStore(db_path=settings.document_db_path)
+    document_store = DocumentStore(
+        upload_dir=settings.upload_dir,
+        metadata_store=document_meta_store,
+    )
+    network_monitor = NetworkMonitor(
+        configured_endpoints={
+            "llm_server": str(settings.llm_base_url),
+        }
+        if settings.llm_enabled
+        else {}
+    )
 
     # Knowledge subsystem components with persistence
     chunking_config = ChunkingConfig(
@@ -189,8 +202,9 @@ def create_app() -> FastAPI:
             type(vector_store).__name__,
         )
         yield
-        # Clean shutdown: close metadata store
+        # Clean shutdown: close metadata stores
         meta_store.close()
+        document_meta_store.close()
         logger.info("Sovereign AI Workbench shutting down")
 
     app = FastAPI(
@@ -216,7 +230,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["root"])
     def health(request: Request) -> dict[str, object]:
-        """Health check endpoint."""
+        """Health check endpoint.
+
+        Returns comprehensive health status including all subsystems:
+        models, tools, documents, knowledge/vectors, audit, and
+        network compliance.
+        """
         reg: ModelRegistry = request.app.state.registry
         tools: ToolRegistry = request.app.state.tool_registry
         knowledge_ingest = getattr(request.app.state, "knowledge_ingestion", None)
@@ -226,6 +245,13 @@ def create_app() -> FastAPI:
             else 0
         )
         knowledge_chunks = vector_store.count()
+
+        # Subsystem health details
+        vector_health = vector_store.get_health_info()
+        doc_health = document_store.get_store_health()
+        audit_health = audit_service.get_health()
+        network_compliance = network_monitor.check_compliance()
+
         return {
             "status": "healthy",
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -236,6 +262,12 @@ def create_app() -> FastAPI:
             "knowledge_documents": knowledge_docs,
             "knowledge_chunks": knowledge_chunks,
             "embedding_provider": embedding_provider.get_name(),
+            "subsystems": {
+                "vector_store": vector_health,
+                "document_store": doc_health,
+                "audit": audit_health,
+                "network": network_compliance,
+            },
         }
 
     # --- Route groups ---

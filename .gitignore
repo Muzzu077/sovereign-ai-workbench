@@ -33,10 +33,13 @@ Thumbs.db
 data/audit.log
 data/documents/*
 !data/documents/.gitkeep
+data/documents.db
+data/uploads/
 data/knowledge_base/*
 !data/knowledge_base/.gitkeep
 data/outputs/*
 !data/outputs/.gitkeep
+backend/data/
 
 # Sandbox outputs
 sandbox/*
