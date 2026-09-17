@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+@theme inline {
+  /* --- Industrial workstation palette --- */
+  --color-bg-primary: #0f1117;
+  --color-bg-secondary: #161922;
+  --color-bg-tertiary: #1c2030;
+  --color-bg-surface: #222738;
+  --color-bg-hover: #2a2f42;
+
+  --color-border-primary: #2d3348;
+  --color-border-secondary: #3a4060;
+
+  --color-text-primary: #e4e6ef;
+  --color-text-secondary: #9ca0b4;
+  --color-text-muted: #6b7094;
+
+  --color-accent-blue: #3b82f6;
+  --color-accent-blue-dim: #2563eb;
+  --color-accent-green: #22c55e;
+  --color-accent-green-dim: #16a34a;
+  --color-accent-amber: #f59e0b;
+  --color-accent-amber-dim: #d97706;
+  --color-accent-red: #ef4444;
+  --color-accent-red-dim: #dc2626;
+  --color-accent-purple: #a78bfa;
+  --color-accent-cyan: #22d3ee;
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "Cascadia Code", monospace;
+}
+
+/* Reset */
+*,
+*::before,
+*::after {
+  border-color: var(--color-border-primary);
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-secondary);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Selection */
+::selection {
+  background: var(--color-accent-blue);
+  color: white;
+}
+
+/* Focus ring utility */
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+}

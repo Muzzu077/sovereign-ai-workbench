@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.models.registry import ModelRegistry
@@ -251,6 +252,18 @@ def create_app() -> FastAPI:
             "for confidential industrial work. SIH 2026 — Problem ID 26117."
         ),
         lifespan=lifespan,
+    )
+
+    # --- CORS middleware (dev-safe, restrict in production) ---
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     # --- Root routes ---

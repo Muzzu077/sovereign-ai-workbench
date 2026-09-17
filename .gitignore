@@ -56,6 +56,7 @@ htmlcov/
 
 # Model weights (never commit)
 models/
+!frontend/src/app/models/
 *.gguf
 *.bin
 *.safetensors

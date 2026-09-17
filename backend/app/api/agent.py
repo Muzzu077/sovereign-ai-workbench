@@ -37,6 +37,7 @@ class AgentRunResponse(BaseModel):
     tool_calls: list[dict[str, Any]] = []
     verification: dict[str, Any] = {}
     result: str
+    trace: list[dict[str, Any]] = []
 
 
 @router.post("/run", response_model=AgentRunResponse)
@@ -76,4 +77,5 @@ def run_agent(body: AgentRunRequest, request: Request) -> AgentRunResponse:
         tool_calls=result.tool_calls,
         verification=result.verification,
         result=result.result,
+        trace=result.trace,
     )
