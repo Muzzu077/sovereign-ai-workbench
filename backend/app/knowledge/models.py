@@ -48,6 +48,8 @@ class EmbeddingConfig:
     """Identifies the embedding configuration used to create an index.
 
     Two indexes are compatible only if their EmbeddingConfig matches.
+    The fingerprint must distinguish all settings that produce
+    materially different embeddings.
     """
 
     provider: str = "tfidf"
@@ -55,14 +57,24 @@ class EmbeddingConfig:
     model_name: str = ""
     dimension: int = 512
     preprocessing_version: int = 1
+    normalization: str = ""  # e.g. "l2", "" for provider-default
 
     def fingerprint(self) -> str:
-        """Stable string identifier for this configuration."""
-        return (
+        """Stable string identifier for this configuration.
+
+        Format: ``{provider}:v{version}:{model_name}:d{dimension}:p{preproc}[:n{norm}]``
+
+        The normalization segment is only appended when non-empty so
+        that existing TF-IDF fingerprints remain unchanged.
+        """
+        base = (
             f"{self.provider}:v{self.version}:"
             f"{self.model_name}:d{self.dimension}:"
             f"p{self.preprocessing_version}"
         )
+        if self.normalization:
+            base += f":n{self.normalization}"
+        return base
 
 
 class KnowledgeChunk(BaseModel):

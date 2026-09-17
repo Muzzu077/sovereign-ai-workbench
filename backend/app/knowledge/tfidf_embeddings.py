@@ -187,3 +187,17 @@ class TfidfEmbeddingProvider(EmbeddingProvider):
         if not self._fitted:
             return 0
         return len(self._vectorizer.vocabulary_)
+
+    def get_health_info(self) -> dict[str, object]:
+        """Return provider health/observability information."""
+        return {
+            "embedding_provider": self.get_name(),
+            "embedding_model": "tfidf",
+            "embedding_dimension": self._max_features,
+            "embedding_version": _TFIDF_VERSION,
+            "embedding_fingerprint": self.get_config().fingerprint(),
+            "device": "cpu",
+            "model_loaded": self._fitted,
+            "offline_mode": True,
+            "vocabulary_size": self.vocabulary_size(),
+        }

@@ -1319,7 +1319,7 @@ class TestKnowledgeConfig:
 
     def test_version_updated(self):
         settings = get_settings()
-        assert settings.app_version == "0.6.1"
+        assert settings.app_version == "0.7.0"
 
 
 # ============================================================

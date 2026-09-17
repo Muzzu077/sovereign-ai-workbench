@@ -1,9 +1,9 @@
 # Sovereign AI Workbench — Complete Project Progress Report
 
 **SIH 2026 — Problem ID 26117**
-**Branch:** `feature/rag-hardening`
-**Current Version:** `0.6.0`
-**Date:** September 11, 2026
+**Branch:** `feature/neural-embeddings`
+**Current Version:** `0.7.0`
+**Date:** September 17, 2026
 
 ---
 
@@ -16,15 +16,16 @@
 5. [Phase 3 — Document Intelligence (v0.4.0)](#5-phase-3--document-intelligence-v040)
 6. [Phase 4 — Knowledge Base & RAG Pipeline (v0.5.0)](#6-phase-4--knowledge-base--rag-pipeline-v050)
 7. [Phase 5 — RAG Hardening (v0.6.0)](#7-phase-5--rag-hardening-v060)
-8. [Complete File Inventory](#8-complete-file-inventory)
-9. [Full API Reference](#9-full-api-reference)
-10. [Data Models & Schemas](#10-data-models--schemas)
-11. [Configuration Reference](#11-configuration-reference)
-12. [Test Suite Summary](#12-test-suite-summary)
-13. [Dependencies](#13-dependencies)
-14. [Security & Air-Gap Compliance](#14-security--air-gap-compliance)
-15. [Current Limitations](#15-current-limitations)
-16. [Future Implementation Phases](#16-future-implementation-phases)
+8. [Phase 6 — Local Neural Embeddings (v0.7.0)](#8-phase-6--local-neural-embeddings-v070)
+9. [Complete File Inventory](#9-complete-file-inventory)
+10. [Full API Reference](#10-full-api-reference)
+11. [Data Models & Schemas](#11-data-models--schemas)
+12. [Configuration Reference](#12-configuration-reference)
+13. [Test Suite Summary](#13-test-suite-summary)
+14. [Dependencies](#14-dependencies)
+15. [Security & Air-Gap Compliance](#15-security--air-gap-compliance)
+16. [Current Limitations](#16-current-limitations)
+17. [Future Implementation Phases](#17-future-implementation-phases)
 
 ---
 
@@ -663,7 +664,131 @@ Deterministic classification computed in application code (never by the LLM):
 
 ---
 
-## 8. Complete File Inventory
+## 8. Phase 6 — Local Neural Embeddings (v0.7.0)
+
+**Branch:** `feature/neural-embeddings`
+**Objective:** Add a local ONNX-based neural embedding provider (all-MiniLM-L6-v2, 384-dimensional) alongside the existing TF-IDF provider, with full integration into the persistent vector store, retrieval evaluation, and offline/sovereign constraints.
+
+### Architecture
+
+The neural embedding provider runs entirely offline using ONNX Runtime and a HuggingFace fast tokenizer. Model artifacts are loaded from the local filesystem — zero network access at runtime. The provider implements the same `EmbeddingProvider` ABC as TF-IDF, making it a drop-in replacement selectable via configuration.
+
+```
+EmbeddingProvider (ABC)
+├── TfidfEmbeddingProvider   ← v0.5.0 baseline (lexical, fit-required)
+└── LocalNeuralEmbeddingProvider  ← v0.7.0 (semantic, ONNX, no fit needed)
+```
+
+### Key Components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| `LocalNeuralEmbeddingProvider` | `backend/app/knowledge/neural_embeddings.py` | ONNX-based neural embedding with lazy loading, mean-pooling, L2 normalization, batch support, NaN/Inf validation |
+| `_build_embedding_provider()` | `backend/app/main.py` | Factory function selecting TF-IDF or neural based on `SAW_EMBEDDING_PROVIDER` |
+| Neural config fields | `backend/app/config.py` | `neural_model_path`, `neural_device`, `neural_batch_size`, `neural_normalize`, `neural_similarity_threshold`, etc. |
+| Extended evaluation | `backend/app/knowledge/evaluation.py` | Paraphrase queries, no-evidence queries, multi-K metrics, `EmbeddingEvaluationResult`, `run_embedding_evaluation()` |
+| Neural tests | `tests/test_neural_embeddings.py` | 97 tests: mocked unit tests (no real model), real integration tests (gated), offline safety |
+
+### Model Selection
+
+**all-MiniLM-L6-v2** via ONNX Runtime:
+- 87MB ONNX model, 384-dimensional embeddings
+- Apache 2.0 license
+- CPU and CUDA support (with fallback)
+- Artifacts stored at `models/embeddings/all-MiniLM-L6-v2/` (not committed to git)
+
+### Retrieval Quality Benchmark
+
+Measured on 4 synthetic industrial documents (SOP-001, INSP-002, MAN-003, PROC-004) with exact, paraphrase, and no-evidence queries:
+
+| Metric | TF-IDF | Neural | Improvement |
+|--------|--------|--------|-------------|
+| Recall@1 | 0.40 | **1.00** | +150% |
+| Recall@5 | 0.60 | **1.00** | +67% |
+| Precision@1 | 0.40 | **1.00** | +150% |
+| Paraphrase Recall@5 | 0.375 | **1.00** | +167% |
+| No-Evidence Accuracy | 0.667 | **1.00** | +50% |
+| Avg Embed Latency | 0.24ms | 1.98ms | — |
+
+Neural embeddings achieve perfect recall on all query types while correctly rejecting irrelevant queries. TF-IDF remains the default provider for zero-dependency deployments.
+
+### Configuration
+
+```bash
+# Switch to neural embeddings
+SAW_EMBEDDING_PROVIDER=neural
+
+# Neural-specific settings
+SAW_NEURAL_MODEL_PATH=models/embeddings/all-MiniLM-L6-v2
+SAW_NEURAL_DEVICE=cpu          # or "cuda"
+SAW_NEURAL_FALLBACK_TO_CPU=false
+SAW_NEURAL_BATCH_SIZE=64
+SAW_NEURAL_NORMALIZE=true
+SAW_NEURAL_MAX_SEQ_LENGTH=256
+SAW_NEURAL_SIMILARITY_THRESHOLD=0.25
+```
+
+### Index Compatibility
+
+When switching providers (TF-IDF → neural or vice versa), the `PersistentVectorStore` detects the embedding fingerprint mismatch and sets health to `REBUILD_REQUIRED`. Re-indexing is required to rebuild vectors with the new provider.
+
+Fingerprint format: `{provider}:v{version}:{model_name}:d{dim}:p{preproc}[:n{norm}]`
+
+- TF-IDF: `tfidf-512:v1::d512:p1`
+- Neural: `neural-all-MiniLM-L6-v2:v1:all-MiniLM-L6-v2:d384:p1:nl2`
+
+### Health Endpoint
+
+The `/health` endpoint now includes an `embeddings` subsystem with provider-specific observability:
+
+```json
+{
+  "subsystems": {
+    "embeddings": {
+      "embedding_provider": "neural-all-MiniLM-L6-v2",
+      "embedding_dimension": 384,
+      "device": "cpu",
+      "model_loaded": true,
+      "offline_mode": true,
+      "normalization": "l2"
+    }
+  }
+}
+```
+
+### Test Coverage (v0.7.0)
+
+| Test Class | Count | Coverage |
+|------------|-------|----------|
+| `TestNeuralEmbeddingConfig` | 5 | Fingerprint format, backward compatibility, normalization suffix |
+| `TestNeuralProviderValidation` | 6 | Missing dir/model/tokenizer, config.json parsing, custom dimension |
+| `TestNeuralProviderInterface` | 14 | embed, embed_batch, dimension, config, determinism, normalization, edge cases |
+| `TestNeuralPreprocessing` | 5 | Whitespace, empty, truncation |
+| `TestMeanPoolAndNormalize` | 5 | Mean pooling, L2 normalization, zero vectors, batches |
+| `TestEmbeddingValidation` | 4 | Dimension mismatch, NaN, Inf rejection |
+| `TestDeviceResolution` | 4 | CPU, CUDA, fallback, provider resolution |
+| `TestLazyLoading` | 4 | Not loaded at construction, loaded after embed, config before load |
+| `TestNeuralHealthInfo` | 2 | Health info structure, pre-load state |
+| `TestIndexCompatibility` | 2 | Fingerprint mismatch → REBUILD_REQUIRED, same fingerprint → HEALTHY |
+| `TestNeuralIngestion` | 4 | Single/multi doc, no fit(), embedding_provider recording |
+| `TestNeuralRetrieval` | 2 | Results returned, threshold filtering |
+| `TestNeuralSettings` | 8 | All Settings neural fields and defaults |
+| `TestProviderFactory` | 3 | Factory returns TF-IDF/neural, missing model raises |
+| `TestOfflineNetworkSafety` | 4 | No socket.socket on construct/embed/batch, offline flag |
+| `TestEvaluationFramework` | 10 | Query datasets, EmbeddingEvaluationResult, helpers, TF-IDF eval run |
+| `TestABCCompliance` | 3 | Subclass check, abstract methods, interface parity |
+| `TestNeuralIntegration` | 8 | Real model: loads, semantic sim, batch consistency, determinism, eval benchmarks |
+| **Total** | **97** | |
+
+### Dependencies Added
+
+- `onnxruntime` 1.30.0 — ONNX model inference
+- `tokenizers` 0.23.2 — HuggingFace fast tokenizer
+- `huggingface-hub` 1.31.0 — model download only (not used at runtime)
+
+---
+
+## 9. Complete File Inventory
 
 ### Application Code (`backend/app/`)
 
@@ -1097,9 +1222,10 @@ All settings use the `SAW_` environment variable prefix and can be overridden vi
 | `0.3.0` | Agent Core | Deterministic agent pipeline, calculator, file reader, verifier, 123 tests |
 | `0.4.0` | Document Intelligence | TXT/PDF/DOCX/OCR processors, document store, file APIs, 209 tests |
 | `0.5.0` | Knowledge Base & RAG | Chunking, TF-IDF embeddings, vector store, ingestion, retrieval, RAG, 399 tests |
-| `0.6.0` | RAG Hardening | Persistent storage, evidence quality, dedup, recovery, evaluation, **418 tests** |
+| `0.6.0` | RAG Hardening | Persistent storage, evidence quality, dedup, recovery, evaluation, 464 tests |
+| `0.7.0` | Neural Embeddings | ONNX-based all-MiniLM-L6-v2, perfect recall, paraphrase eval, offline, **561 tests** |
 
 ---
 
-*Generated: September 11, 2026*
-*Branch: `feature/rag-hardening` @ commit `7a25c5e`*
+*Generated: September 17, 2026*
+*Branch: `feature/neural-embeddings`*

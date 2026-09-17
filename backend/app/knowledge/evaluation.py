@@ -9,20 +9,24 @@ Does not use internet data. Uses synthetic/local industrial documents:
 - Internal Approval Procedure (PROC-004)
 
 Evaluates:
-- Recall@K
-- Precision@K
+- Recall@K (K=1,3,5)
+- Precision@K (K=1,3,5)
 - Threshold behavior
 - No-evidence behavior
+- Paraphrase retrieval
 - Citation correctness
+- TF-IDF vs Neural comparison
 """
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.documents.models import Document, DocumentMetadata, DocumentPage, ExtractionStatus, FileType
 from app.knowledge.chunking import ChunkingConfig, ChunkingService
+from app.knowledge.embeddings import EmbeddingProvider
 from app.knowledge.ingestion import KnowledgeIngestionService
 from app.knowledge.retrieval import KnowledgeRetriever
 from app.knowledge.tfidf_embeddings import TfidfEmbeddingProvider
@@ -287,3 +291,322 @@ def run_retrieval_evaluation(
         mean_precision_at_k=sum(precisions) / len(precisions) if precisions else 0.0,
         query_details=details,
     )
+
+
+# ============================================================
+# Paraphrase / Semantic Evaluation Queries
+# ============================================================
+
+PARAPHRASE_QUERIES = [
+    # Paraphrases of existing exact-match queries
+    EvalQuery(
+        query="How do I isolate energy and verify zero energy state on equipment?",
+        expected_doc_ids=["SOP-001"],
+        expected_filenames=["Safety_SOP.txt"],
+        description="Paraphrase: LOTO procedure (semantic rewording)",
+    ),
+    EvalQuery(
+        query="What conditions require an immediate turbine shutdown?",
+        expected_doc_ids=["INSP-002"],
+        expected_filenames=["Inspection_Procedure.txt"],
+        description="Paraphrase: vibration alarm thresholds",
+    ),
+    EvalQuery(
+        query="How long should the turning gear run before starting the turbine?",
+        expected_doc_ids=["MAN-003"],
+        expected_filenames=["Maintenance_Manual.txt"],
+        description="Paraphrase: startup turning gear time",
+    ),
+    EvalQuery(
+        query="Which manager signs off on high-cost plant modifications?",
+        expected_doc_ids=["PROC-004"],
+        expected_filenames=["Approval_Procedure.txt"],
+        description="Paraphrase: ECO approval for expensive changes",
+    ),
+    # New paraphrase queries testing deeper semantic understanding
+    EvalQuery(
+        query="At what condition should the air filter be replaced?",
+        expected_doc_ids=["MAN-003"],
+        expected_filenames=["Maintenance_Manual.txt"],
+        description="Paraphrase: oil filter replacement condition",
+    ),
+    EvalQuery(
+        query="What protective gear is required near high-voltage switchgear?",
+        expected_doc_ids=["SOP-001"],
+        expected_filenames=["Safety_SOP.txt"],
+        description="Paraphrase: PPE for high-voltage areas",
+    ),
+    EvalQuery(
+        query="What should be checked on the turbine bearing regularly?",
+        expected_doc_ids=["INSP-002"],
+        expected_filenames=["Inspection_Procedure.txt"],
+        description="Paraphrase: bearing inspection requirements",
+    ),
+    EvalQuery(
+        query="Who can authorize a temporary emergency bypass?",
+        expected_doc_ids=["PROC-004"],
+        expected_filenames=["Approval_Procedure.txt"],
+        description="Paraphrase: emergency repair authorization",
+    ),
+]
+
+
+NO_EVIDENCE_QUERIES = [
+    EvalQuery(
+        query="What is the recipe for chocolate cake?",
+        expected_doc_ids=[],
+        expected_filenames=[],
+        description="No-evidence: completely unrelated (cooking)",
+    ),
+    EvalQuery(
+        query="Explain the theory of quantum entanglement.",
+        expected_doc_ids=[],
+        expected_filenames=[],
+        description="No-evidence: unrelated domain (physics)",
+    ),
+    EvalQuery(
+        query="How do I configure a Kubernetes cluster for auto-scaling?",
+        expected_doc_ids=[],
+        expected_filenames=[],
+        description="No-evidence: unrelated domain (IT/DevOps)",
+    ),
+]
+
+
+# Combined full evaluation set
+ALL_EVAL_QUERIES = EVAL_QUERIES + PARAPHRASE_QUERIES + NO_EVIDENCE_QUERIES
+
+
+# ============================================================
+# Extended Evaluation with Multi-K Metrics
+# ============================================================
+
+@dataclass
+class EmbeddingEvaluationResult:
+    """Comprehensive evaluation results for a single embedding provider.
+
+    Records per-K recall/precision, latency, and provider metadata.
+    """
+
+    provider: str = ""
+    model: str = ""
+    dimension: int = 0
+    device: str = ""
+
+    # Metrics at K=1,3,5
+    recall_at_1: float = 0.0
+    recall_at_3: float = 0.0
+    recall_at_5: float = 0.0
+    precision_at_1: float = 0.0
+    precision_at_3: float = 0.0
+    precision_at_5: float = 0.0
+
+    # Paraphrase-specific metrics at K=5
+    paraphrase_recall_at_5: float = 0.0
+    paraphrase_precision_at_5: float = 0.0
+
+    # No-evidence accuracy (fraction where no results above threshold)
+    no_evidence_accuracy: float = 0.0
+
+    # Latency (milliseconds)
+    avg_embedding_latency_ms: float = 0.0
+    avg_retrieval_latency_ms: float = 0.0
+    total_evaluation_time_ms: float = 0.0
+
+    # Per-query details
+    query_details: list[dict[str, Any]] = field(default_factory=list)
+
+    # Similarity threshold used
+    similarity_threshold: float = 0.0
+
+
+def _compute_recall_precision(
+    results: list[Any],
+    expected_doc_ids: list[str],
+    k: int,
+) -> tuple[float, float]:
+    """Compute Recall@K and Precision@K for a single query."""
+    retrieved = [r.document_id for r in results[:k]]
+    expected_set = set(expected_doc_ids)
+    if not expected_set:
+        # No-evidence query: precision/recall are N/A, measured separately
+        return 1.0 if not retrieved else 0.0, 1.0 if not retrieved else 0.0
+    found = set(retrieved) & expected_set
+    recall = len(found) / len(expected_set)
+    precision = len(found) / len(retrieved) if retrieved else 0.0
+    return recall, precision
+
+
+def run_embedding_evaluation(
+    embedding_provider: EmbeddingProvider,
+    *,
+    exact_queries: list[EvalQuery] | None = None,
+    paraphrase_queries: list[EvalQuery] | None = None,
+    no_evidence_queries: list[EvalQuery] | None = None,
+    similarity_threshold: float = 0.05,
+    top_k: int = 5,
+) -> EmbeddingEvaluationResult:
+    """Run a full evaluation of an embedding provider against the industrial corpus.
+
+    Builds a fresh knowledge system, ingests the standard evaluation
+    corpus, then measures retrieval quality at K=1,3,5 for exact,
+    paraphrase, and no-evidence queries.
+
+    Args:
+        embedding_provider: The provider to evaluate.
+        exact_queries: Exact-match queries (default: EVAL_QUERIES).
+        paraphrase_queries: Paraphrase queries (default: PARAPHRASE_QUERIES).
+        no_evidence_queries: Irrelevant queries (default: NO_EVIDENCE_QUERIES).
+        similarity_threshold: The threshold to apply during retrieval.
+        top_k: Maximum results to retrieve per query.
+
+    Returns:
+        EmbeddingEvaluationResult with all metrics.
+    """
+    total_start = time.monotonic()
+
+    if exact_queries is None:
+        exact_queries = EVAL_QUERIES
+    if paraphrase_queries is None:
+        paraphrase_queries = PARAPHRASE_QUERIES
+    if no_evidence_queries is None:
+        no_evidence_queries = NO_EVIDENCE_QUERIES
+
+    # Build fresh knowledge system
+    chunking_service = ChunkingService(config=ChunkingConfig())
+    vector_store = InMemoryVectorStore()
+    ingestion_service = KnowledgeIngestionService(
+        chunking_service=chunking_service,
+        embedding_provider=embedding_provider,
+        vector_store=vector_store,
+    )
+
+    # Ingest evaluation corpus
+    corpus = build_evaluation_corpus()
+    for doc in corpus:
+        ingestion_service.ingest(doc)
+
+    retriever = KnowledgeRetriever(
+        embedding_provider=embedding_provider,
+        vector_store=vector_store,
+        ingestion_service=ingestion_service,
+        default_top_k=top_k,
+        similarity_threshold=similarity_threshold,
+    )
+
+    # --- Evaluate exact queries at K=1,3,5 ---
+    exact_recalls = {1: [], 3: [], 5: []}
+    exact_precisions = {1: [], 3: [], 5: []}
+    all_details: list[dict[str, Any]] = []
+    latencies: list[float] = []
+
+    for eq in exact_queries:
+        embed_start = time.monotonic()
+        results, retrieval_time = retriever.retrieve(eq.query, top_k=top_k)
+        latencies.append(retrieval_time)
+
+        detail: dict[str, Any] = {
+            "query": eq.query,
+            "description": eq.description,
+            "category": "exact",
+            "expected_doc_ids": eq.expected_doc_ids,
+            "retrieved_doc_ids": [r.document_id for r in results],
+            "scores": [round(r.score, 4) for r in results],
+            "retrieval_time_ms": round(retrieval_time, 2),
+        }
+
+        for k in (1, 3, 5):
+            recall, precision = _compute_recall_precision(results, eq.expected_doc_ids, k)
+            exact_recalls[k].append(recall)
+            exact_precisions[k].append(precision)
+            detail[f"recall_at_{k}"] = recall
+            detail[f"precision_at_{k}"] = precision
+
+        all_details.append(detail)
+
+    # --- Evaluate paraphrase queries at K=5 ---
+    para_recalls: list[float] = []
+    para_precisions: list[float] = []
+
+    for eq in paraphrase_queries:
+        results, retrieval_time = retriever.retrieve(eq.query, top_k=top_k)
+        latencies.append(retrieval_time)
+
+        recall, precision = _compute_recall_precision(results, eq.expected_doc_ids, 5)
+        para_recalls.append(recall)
+        para_precisions.append(precision)
+
+        all_details.append({
+            "query": eq.query,
+            "description": eq.description,
+            "category": "paraphrase",
+            "expected_doc_ids": eq.expected_doc_ids,
+            "retrieved_doc_ids": [r.document_id for r in results],
+            "scores": [round(r.score, 4) for r in results],
+            "recall_at_5": recall,
+            "precision_at_5": precision,
+            "retrieval_time_ms": round(retrieval_time, 2),
+        })
+
+    # --- Evaluate no-evidence queries ---
+    no_evidence_correct = 0
+    for eq in no_evidence_queries:
+        results, retrieval_time = retriever.retrieve(eq.query, top_k=top_k)
+        latencies.append(retrieval_time)
+
+        # For no-evidence, we check that no results or all scores are very low
+        has_strong_match = any(r.score >= similarity_threshold for r in results)
+        # These queries should ideally return NO results above threshold
+        if not has_strong_match or len(results) == 0:
+            no_evidence_correct += 1
+
+        all_details.append({
+            "query": eq.query,
+            "description": eq.description,
+            "category": "no_evidence",
+            "expected_doc_ids": [],
+            "retrieved_doc_ids": [r.document_id for r in results],
+            "scores": [round(r.score, 4) for r in results],
+            "correct_no_evidence": not has_strong_match or len(results) == 0,
+            "retrieval_time_ms": round(retrieval_time, 2),
+        })
+
+    total_time = (time.monotonic() - total_start) * 1000
+
+    # --- Measure embedding latency ---
+    embed_latencies: list[float] = []
+    for _ in range(5):
+        start = time.monotonic()
+        embedding_provider.embed("sample query for latency measurement")
+        embed_latencies.append((time.monotonic() - start) * 1000)
+
+    config = embedding_provider.get_config()
+
+    return EmbeddingEvaluationResult(
+        provider=config.provider,
+        model=config.model_name,
+        dimension=config.dimension,
+        device=getattr(embedding_provider, "active_device", "cpu"),
+        recall_at_1=_safe_mean(exact_recalls[1]),
+        recall_at_3=_safe_mean(exact_recalls[3]),
+        recall_at_5=_safe_mean(exact_recalls[5]),
+        precision_at_1=_safe_mean(exact_precisions[1]),
+        precision_at_3=_safe_mean(exact_precisions[3]),
+        precision_at_5=_safe_mean(exact_precisions[5]),
+        paraphrase_recall_at_5=_safe_mean(para_recalls),
+        paraphrase_precision_at_5=_safe_mean(para_precisions),
+        no_evidence_accuracy=(
+            no_evidence_correct / len(no_evidence_queries)
+            if no_evidence_queries else 0.0
+        ),
+        avg_embedding_latency_ms=_safe_mean(embed_latencies),
+        avg_retrieval_latency_ms=_safe_mean(latencies),
+        total_evaluation_time_ms=round(total_time, 2),
+        query_details=all_details,
+        similarity_threshold=similarity_threshold,
+    )
+
+
+def _safe_mean(values: list[float]) -> float:
+    """Compute mean, returning 0.0 for empty lists."""
+    return round(sum(values) / len(values), 4) if values else 0.0

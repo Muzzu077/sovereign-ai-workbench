@@ -38,6 +38,7 @@ from app.documents.store import DocumentStore
 from app.documents.persistence import DocumentMetadataStore
 from app.knowledge.chunking import ChunkingConfig, ChunkingService
 from app.knowledge.tfidf_embeddings import TfidfEmbeddingProvider
+from app.knowledge.embeddings import EmbeddingProvider
 from app.knowledge.persistence import KnowledgeMetadataStore
 from app.knowledge.persistent_store import PersistentVectorStore
 from app.knowledge.ingestion import KnowledgeIngestionService
@@ -51,6 +52,30 @@ from app.api import documents as documents_api
 from app.api import knowledge as knowledge_api
 
 logger = logging.getLogger(__name__)
+
+
+def _build_embedding_provider(settings) -> EmbeddingProvider:
+    """Create the configured embedding provider.
+
+    Returns TfidfEmbeddingProvider (default) or LocalNeuralEmbeddingProvider
+    based on SAW_EMBEDDING_PROVIDER.
+    """
+    if settings.embedding_provider == "neural":
+        from app.knowledge.neural_embeddings import LocalNeuralEmbeddingProvider
+
+        return LocalNeuralEmbeddingProvider(
+            model_path=settings.neural_model_path,
+            model_name=settings.neural_model_name,
+            device=settings.neural_device,
+            fallback_to_cpu=settings.neural_fallback_to_cpu,
+            max_seq_length=settings.neural_max_seq_length,
+            batch_size=settings.neural_batch_size,
+            normalize=settings.neural_normalize,
+        )
+
+    return TfidfEmbeddingProvider(
+        max_features=settings.embedding_dimension,
+    )
 
 
 def _build_tool_registry(settings) -> ToolRegistry:
@@ -114,24 +139,35 @@ def create_app() -> FastAPI:
         min_chunk_size=settings.min_chunk_size,
     )
     chunking_service = ChunkingService(config=chunking_config)
-    embedding_provider = TfidfEmbeddingProvider(
-        max_features=settings.embedding_dimension,
-    )
+    embedding_provider = _build_embedding_provider(settings)
+    embedding_config = embedding_provider.get_config()
+
+    # Determine similarity threshold: use neural-specific threshold when
+    # the neural provider is active, otherwise use the default.
+    effective_threshold = settings.similarity_threshold
+    if settings.embedding_provider == "neural":
+        effective_threshold = settings.neural_similarity_threshold
+
     meta_store = KnowledgeMetadataStore(db_path=settings.knowledge_db_path)
-    vector_store = PersistentVectorStore(storage_dir=settings.vector_storage_path)
+    vector_store = PersistentVectorStore(
+        storage_dir=settings.vector_storage_path,
+        expected_dimension=embedding_config.dimension,
+        embedding_fingerprint=embedding_config.fingerprint(),
+    )
 
     ingestion_service = KnowledgeIngestionService(
         chunking_service=chunking_service,
         embedding_provider=embedding_provider,
         vector_store=vector_store,
         metadata_store=meta_store,
+        embedding_config=embedding_config,
     )
     retriever = KnowledgeRetriever(
         embedding_provider=embedding_provider,
         vector_store=vector_store,
         ingestion_service=ingestion_service,
         default_top_k=settings.retrieval_top_k,
-        similarity_threshold=settings.similarity_threshold,
+        similarity_threshold=effective_threshold,
     )
     knowledge_search_tool = KnowledgeSearchTool(retriever=retriever)
 
@@ -251,6 +287,11 @@ def create_app() -> FastAPI:
         doc_health = document_store.get_store_health()
         audit_health = audit_service.get_health()
         network_compliance = network_monitor.check_compliance()
+        embedding_health = (
+            embedding_provider.get_health_info()
+            if hasattr(embedding_provider, "get_health_info")
+            else {"embedding_provider": embedding_provider.get_name()}
+        )
 
         return {
             "status": "healthy",
@@ -267,6 +308,7 @@ def create_app() -> FastAPI:
                 "document_store": doc_health,
                 "audit": audit_health,
                 "network": network_compliance,
+                "embeddings": embedding_health,
             },
         }
 
