@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     """Global application settings loaded from environment variables or .env file."""
 
     app_name: str = "Sovereign AI Workbench"
-    app_version: str = "0.5.0"
+    app_version: str = "0.7.0"
     debug: bool = False
 
     # Paths
@@ -53,6 +53,27 @@ class Settings(BaseSettings):
     min_chunk_size: int = 50
     embedding_dimension: int = 512
     retrieval_top_k: int = 5
+    similarity_threshold: float = 0.05
+    max_context_chars: int = 5000
+
+    # --- Embedding provider ---
+    embedding_provider: str = "tfidf"
+    embedding_version: int = 1
+
+    # --- Neural embedding provider (used when embedding_provider="neural") ---
+    neural_model_path: Path = Path("models/embeddings/all-MiniLM-L6-v2")
+    neural_model_name: str = "all-MiniLM-L6-v2"
+    neural_device: str = "cpu"
+    neural_fallback_to_cpu: bool = False
+    neural_batch_size: int = 64
+    neural_normalize: bool = True
+    neural_max_seq_length: int = 256
+    neural_similarity_threshold: float = 0.25
+
+    # --- Persistence ---
+    knowledge_db_path: Path = Path("data/knowledge_base/knowledge.db")
+    vector_storage_path: Path = Path("data/knowledge_base/vectors")
+    document_db_path: Path = Path("data/documents.db")
 
     model_config = {
         "env_prefix": "SAW_",

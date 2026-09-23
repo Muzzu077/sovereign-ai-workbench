@@ -15,6 +15,8 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+from app.knowledge.models import EmbeddingConfig
+
 
 class EmbeddingProvider(ABC):
     """Abstract base class for all embedding providers.
@@ -56,3 +58,24 @@ class EmbeddingProvider(ABC):
     def get_name(self) -> str:
         """Return the name of this embedding provider."""
         ...
+
+    def get_version(self) -> int:
+        """Return the version of this embedding provider.
+
+        Override in subclasses. Incrementing the version signals
+        that existing embeddings are incompatible and need re-indexing.
+        """
+        return 1
+
+    def get_model_name(self) -> str:
+        """Return the model name used by this provider, if applicable."""
+        return ""
+
+    def get_config(self) -> EmbeddingConfig:
+        """Build an EmbeddingConfig describing this provider's settings."""
+        return EmbeddingConfig(
+            provider=self.get_name(),
+            version=self.get_version(),
+            model_name=self.get_model_name(),
+            dimension=self.dimension(),
+        )
