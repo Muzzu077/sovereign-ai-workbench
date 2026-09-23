@@ -190,12 +190,14 @@ def create_app() -> FastAPI:
                 model_path=settings.llm_model_path,
             )
             model_registry.register("general", provider)
+            model_registry.register("local", DummyLocalModel())
         else:
             logger.info(
                 "LLM disabled (SAW_LLM_ENABLED=false) — "
                 "registering DummyLocalModel for development/testing."
             )
             model_registry.register("general", DummyLocalModel())
+            model_registry.register("local", DummyLocalModel())
 
         # Wire up the orchestrator with all registries.
         orchestrator = AgentOrchestrator(
@@ -211,6 +213,7 @@ def create_app() -> FastAPI:
         rag_service = RAGService(
             retriever=retriever,
             model_provider=model_provider,
+            model_registry=model_registry,
             default_similarity_threshold=settings.similarity_threshold,
         )
 

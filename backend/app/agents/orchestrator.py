@@ -21,6 +21,7 @@ the AgentExecutor and ToolRegistry.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from pydantic import BaseModel
@@ -34,6 +35,8 @@ from app.models.base import GenerationRequest
 from app.models.registry import ModelRegistry
 from app.security.audit import AuditService
 from app.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class OrchestratorResult(BaseModel):
@@ -99,7 +102,7 @@ class AgentOrchestrator:
             else None
         )
 
-    def run(self, task: str) -> OrchestratorResult:
+    def run(self, task: str, model_name: str | None = None) -> OrchestratorResult:
         """Execute a task through the full agent pipeline.
 
         1. Route the task
@@ -111,6 +114,7 @@ class AgentOrchestrator:
 
         Args:
             task: Natural-language task description.
+            model_name: Optional model provider name override.
 
         Returns:
             OrchestratorResult with full execution details.
@@ -129,13 +133,13 @@ class AgentOrchestrator:
         )
 
         # --- 2. Resolve model ---
-        model_name = self._default_model
+        resolved_model_name = model_name or self._default_model
         try:
-            provider = self._registry.get(model_name)
+            provider = self._registry.get(resolved_model_name)
         except KeyError as exc:
             return self._error_result(
                 task=task,
-                model_name=model_name,
+                model_name=resolved_model_name,
                 error=f"Model selection failed: {exc}",
                 trace=trace,
                 route=route,
@@ -160,7 +164,7 @@ class AgentOrchestrator:
             except Exception as exc:
                 return self._error_result(
                     task=task,
-                    model_name=model_name,
+                    model_name=resolved_model_name,
                     provider_type=provider_type,
                     error=f"Planning failed: {exc}",
                     trace=trace,
@@ -178,7 +182,7 @@ class AgentOrchestrator:
                 )
                 self._audit.record(
                     task=task,
-                    selected_model=model_name,
+                    selected_model=resolved_model_name,
                     execution_status="error",
                     metadata={
                         "provider": provider_type,
@@ -191,7 +195,7 @@ class AgentOrchestrator:
                     run_id=trace.run_id,
                     task=task,
                     task_type=route.task_type,
-                    selected_model=model_name,
+                    selected_model=resolved_model_name,
                     provider=provider_type,
                     execution_status="error",
                     plan=self._plan_to_dicts(plan),
@@ -202,22 +206,52 @@ class AgentOrchestrator:
                 )
 
         # --- 5. Generate final LLM response ---
+        effective_model_name = resolved_model_name
         if not provider.is_available():
-            return self._error_result(
-                task=task,
-                model_name=model_name,
-                provider_type=provider_type,
-                error="Selected model is not currently available.",
-                trace=trace,
-                route=route,
-                plan=plan,
-                exec_result=exec_result,
-            )
+            available = self._registry.get_available(preferred="local")
+            if available is not None and available[1] is not provider:
+                fallback_name, fallback_provider = available
+                logger.info(
+                    "Primary model provider '%s' unavailable; falling back to '%s'",
+                    resolved_model_name,
+                    fallback_name,
+                )
+                provider = fallback_provider
+                provider_type = getattr(provider, "get_provider_type", lambda: "dummy")()
+                effective_model_name = f"{fallback_name} (fallback)"
+            else:
+                return self._error_result(
+                    task=task,
+                    model_name=resolved_model_name,
+                    provider_type=provider_type,
+                    error="Selected model is not currently available.",
+                    trace=trace,
+                    route=route,
+                    plan=plan,
+                    exec_result=exec_result,
+                )
 
         try:
             prompt = self._build_final_prompt(task, route, exec_result)
             request = GenerationRequest(prompt=prompt)
-            response = provider.generate(request)
+            try:
+                response = provider.generate(request)
+            except Exception as gen_err:
+                available = self._registry.get_available(preferred="local")
+                if available is not None and available[1] is not provider:
+                    fallback_name, fallback_provider = available
+                    logger.warning(
+                        "Generation with '%s' failed (%s); falling back to '%s'",
+                        effective_model_name,
+                        gen_err,
+                        fallback_name,
+                    )
+                    provider = fallback_provider
+                    provider_type = getattr(provider, "get_provider_type", lambda: "dummy")()
+                    effective_model_name = f"{fallback_name} (fallback)"
+                    response = provider.generate(request)
+                else:
+                    raise gen_err
 
             trace.emit(
                 EventType.TASK_COMPLETED,
@@ -229,7 +263,7 @@ class AgentOrchestrator:
 
             self._audit.record(
                 task=task,
-                selected_model=model_name,
+                selected_model=effective_model_name,
                 execution_status="success",
                 metadata={
                     "tokens_used": response.tokens_used,
@@ -247,7 +281,7 @@ class AgentOrchestrator:
                 run_id=trace.run_id,
                 task=task,
                 task_type=route.task_type,
-                selected_model=model_name,
+                selected_model=effective_model_name,
                 provider=provider_type,
                 execution_status="success",
                 plan=self._plan_to_dicts(plan) if plan else [],
@@ -268,7 +302,7 @@ class AgentOrchestrator:
             )
             self._audit.record(
                 task=task,
-                selected_model=model_name,
+                selected_model=effective_model_name,
                 execution_status="error",
                 metadata={
                     "error": str(exc),
@@ -280,7 +314,7 @@ class AgentOrchestrator:
                 run_id=trace.run_id,
                 task=task,
                 task_type=route.task_type,
-                selected_model=model_name,
+                selected_model=effective_model_name,
                 provider=provider_type,
                 execution_status="error",
                 plan=self._plan_to_dicts(plan) if plan else [],

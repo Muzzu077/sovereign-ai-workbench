@@ -1,12 +1,11 @@
 /**
  * Typed API contracts for the Sovereign AI Workbench backend (v0.7.0).
  *
- * These types mirror the Pydantic models defined in backend/app/api/
- * and backend/app/knowledge/models.py.  Keep them in sync manually.
+ * Fully synchronized with FastAPI endpoints and domain models.
  */
 
 // ---------------------------------------------------------------------------
-// Enums
+// Core Enums & Literals
 // ---------------------------------------------------------------------------
 
 export type EvidenceQuality =
@@ -28,11 +27,16 @@ export type ExtractionStatus =
   | "pending"
   | "processing"
   | "completed"
-  | "failed";
+  | "failed"
+  | "ocr_required";
 
 export type FileType = "txt" | "pdf" | "docx" | "unknown";
 
-export type VerificationStatus = "pass" | "fail" | "not_verified";
+export type ModelHealthStatus =
+  | "available"
+  | "unavailable"
+  | "timeout"
+  | "misconfigured";
 
 export type EventType =
   | "task_received"
@@ -57,7 +61,54 @@ export interface RootInfo {
   message: string;
 }
 
-export interface SubsystemHealth {
+export interface VectorStoreHealth {
+  status: string;
+  storage_dir?: string;
+  vector_count?: number;
+  generation?: number;
+  embedding_fingerprint?: string;
+  [key: string]: unknown;
+}
+
+export interface DocumentStoreHealth {
+  status: string;
+  total_documents?: number;
+  available_documents?: number;
+  missing_files?: number;
+  [key: string]: unknown;
+}
+
+export interface AuditHealth {
+  status: string;
+  log_file?: string;
+  session_records?: number;
+  tamper_evident?: boolean;
+  [key: string]: unknown;
+}
+
+export interface NetworkHealth {
+  status: string;
+  violations?: string[];
+  note?: string;
+  endpoints?: Array<{
+    name: string;
+    url: string;
+    is_loopback: boolean;
+  }>;
+  [key: string]: unknown;
+}
+
+export interface EmbeddingsHealth {
+  status?: string;
+  embedding_provider: string;
+  embedding_model?: string;
+  embedding_dimension?: number;
+  embedding_version?: number;
+  embedding_fingerprint?: string;
+  offline_mode?: boolean;
+  model_loaded?: boolean;
+  device?: string;
+  vocabulary_size?: number;
   [key: string]: unknown;
 }
 
@@ -72,11 +123,11 @@ export interface HealthResponse {
   knowledge_chunks: number;
   embedding_provider: string;
   subsystems: {
-    vector_store: SubsystemHealth;
-    document_store: SubsystemHealth;
-    audit: SubsystemHealth;
-    network: SubsystemHealth;
-    embeddings: SubsystemHealth;
+    vector_store: VectorStoreHealth;
+    document_store: DocumentStoreHealth;
+    audit: AuditHealth;
+    network: NetworkHealth;
+    embeddings: EmbeddingsHealth;
   };
 }
 
@@ -87,9 +138,9 @@ export interface HealthResponse {
 export interface FileUploadResponse {
   document_id: string;
   filename: string;
-  file_type: FileType;
+  file_type: string;
   file_size: number;
-  extraction_status: ExtractionStatus;
+  extraction_status: string;
   page_count: number;
   text_preview: string;
 }
@@ -97,12 +148,12 @@ export interface FileUploadResponse {
 export interface FileInfo {
   document_id: string;
   filename: string;
-  file_type: FileType;
+  file_type: string;
   file_size: number;
-  extraction_status: ExtractionStatus;
+  extraction_status: string;
   page_count: number;
+  created_at: string;
   text_preview: string;
-  uploaded_at: string;
 }
 
 export interface FileListResponse {
@@ -130,7 +181,7 @@ export interface AnalysisResult {
 }
 
 // ---------------------------------------------------------------------------
-// Knowledge Base (ingest / search / query)
+// Knowledge Base
 // ---------------------------------------------------------------------------
 
 export interface IngestResponse {
@@ -138,7 +189,7 @@ export interface IngestResponse {
   filename: string;
   file_type: string;
   chunk_count: number;
-  ingestion_status: IngestionStatus;
+  ingestion_status: string;
   ingestion_time_ms: number;
   embedding_time_ms: number;
 }
@@ -154,7 +205,7 @@ export interface SearchResultItem {
   document_id: string;
   filename: string;
   text: string;
-  score: float;
+  score: number;
   page_number: number | null;
   section: string | null;
 }
@@ -192,40 +243,63 @@ export interface QueryResponse {
   total_time_ms: number;
   evidence_sufficient: boolean;
   evidence_quality: EvidenceQuality;
-  embedding_time_ms: number;
-  context_construction_time_ms: number;
   similarity_threshold: number;
-  candidates_count: number;
 }
 
 export interface KnowledgeDocument {
   document_id: string;
   filename: string;
   file_type: string;
-  content_hash: string;
   chunk_count: number;
-  ingestion_status: IngestionStatus;
-  embedding_provider: string;
-  embedding_version: number;
-  chunking_version: number;
+  ingestion_status: string;
   ingested_at: string | null;
-  updated_at: string | null;
   ingestion_time_ms: number;
   embedding_time_ms: number;
+  content_hash: string;
   error_info: string | null;
-  metadata: Record<string, unknown>;
+}
+
+export interface DeleteKnowledgeResponse {
+  status: string;
+  document_id: string;
 }
 
 // ---------------------------------------------------------------------------
-// Agent execution
+// Agent Execution
 // ---------------------------------------------------------------------------
 
 export interface TraceEvent {
   timestamp: string;
   run_id: string;
-  event_type: EventType;
+  event_type: EventType | string;
   step_id: string | null;
   metadata: Record<string, unknown>;
+}
+
+export interface PlanStepItem {
+  step_id?: string;
+  tool?: string;
+  description?: string;
+  input?: Record<string, unknown>;
+  depends_on?: string[];
+  [key: string]: unknown;
+}
+
+export interface ToolCallItem {
+  step_id?: string;
+  tool?: string;
+  tool_result?: {
+    success?: boolean;
+    result?: unknown;
+    error?: string | null;
+    metadata?: Record<string, unknown>;
+  };
+  verification?: {
+    status?: string;
+    tool_name?: string;
+    detail?: string;
+  } | null;
+  [key: string]: unknown;
 }
 
 export interface AgentRunRequest {
@@ -239,8 +313,8 @@ export interface AgentRunResponse {
   selected_model: string;
   provider: string;
   execution_status: string;
-  plan: Record<string, unknown>[];
-  tool_calls: Record<string, unknown>[];
+  plan: PlanStepItem[];
+  tool_calls: ToolCallItem[];
   verification: Record<string, unknown>;
   result: string;
   trace: TraceEvent[];
@@ -260,19 +334,54 @@ export interface ModelCapability {
 
 export interface ModelInfo {
   name: string;
-  provider: string;
+  provider_name: string;
+  provider_type: string;
+  available: boolean;
+  local: boolean;
+  base_url: string | null;
   capabilities: ModelCapability;
-  is_available: boolean;
+}
+
+export interface RawModelsResponse {
+  models: Record<
+    string,
+    {
+      provider_name: string;
+      provider_type: string;
+      available: boolean;
+      local: boolean;
+      base_url: string | null;
+      capabilities: ModelCapability;
+    }
+  >;
 }
 
 export interface ModelHealthInfo {
   name: string;
   provider: string;
-  is_available: boolean;
-  health_details: Record<string, unknown>;
+  status: ModelHealthStatus | string;
+  local: boolean;
+  model_path: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Utility type alias
-// ---------------------------------------------------------------------------
-type float = number;
+export interface RawModelsHealthResponse {
+  models: ModelHealthInfo[];
+}
+
+export interface ModelInferenceRequest {
+  prompt: string;
+  model_name?: string;
+  system_prompt?: string;
+  max_tokens?: number;
+  temperature?: number;
+}
+
+export interface ModelInferenceResponse {
+  text: string;
+  model_name: string;
+  provider: string;
+  tokens_used: number | null;
+  duration_ms: number;
+  fallback_used: boolean;
+  metadata: Record<string, unknown>;
+}

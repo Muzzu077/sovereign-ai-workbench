@@ -18,6 +18,7 @@ class AgentRunRequest(BaseModel):
     """Request body for POST /agent/run."""
 
     task: str
+    model: str | None = None
 
 
 class AgentRunResponse(BaseModel):
@@ -64,7 +65,7 @@ def run_agent(body: AgentRunRequest, request: Request) -> AgentRunResponse:
             detail="Task must not be empty.",
         )
 
-    result: OrchestratorResult = orchestrator.run(body.task)
+    result: OrchestratorResult = orchestrator.run(body.task, model_name=body.model)
 
     return AgentRunResponse(
         run_id=result.run_id,

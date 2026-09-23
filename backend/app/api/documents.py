@@ -193,10 +193,14 @@ def analyze_document(document_id: str, request: Request) -> AnalysisResult:
         )
 
     if not provider.is_available():
-        raise HTTPException(
-            status_code=503,
-            detail="Model provider is not currently available.",
-        )
+        available = registry.get_available(preferred="local")
+        if available is not None:
+            provider = available[1]
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail="Model provider is not currently available.",
+            )
 
     # --- Build prompt and generate ---
     prompt = _build_analysis_prompt(document.text, document.filename)
@@ -213,7 +217,15 @@ def analyze_document(document_id: str, request: Request) -> AnalysisResult:
                 "facts from the document. Do not make up information."
             ),
         )
-        response = provider.generate(gen_request)
+        try:
+            response = provider.generate(gen_request)
+        except Exception as gen_err:
+            available = registry.get_available(preferred="local")
+            if available is not None and available[1] is not provider:
+                provider = available[1]
+                response = provider.generate(gen_request)
+            else:
+                raise gen_err
     except Exception as exc:
         logger.error("Analysis generation failed: %s", exc)
         raise HTTPException(

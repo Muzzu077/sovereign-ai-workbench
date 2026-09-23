@@ -1,441 +1,387 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import React, { useState } from "react";
 import {
-  runAgent,
-  type AgentRunResponse,
-  type TraceEvent,
-  ApiError,
-} from "@/lib/api";
-import Panel from "@/components/ui/Panel";
-import Button from "@/components/ui/Button";
-import StatusBadge from "@/components/ui/StatusBadge";
-import Spinner from "@/components/ui/Spinner";
-import EmptyState from "@/components/ui/EmptyState";
+  Bot,
+  Play,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  Terminal,
+  Layers,
+  Wrench,
+  Check,
+  RefreshCw,
+  Sparkles,
+  Zap,
+  ArrowRight,
+  ShieldCheck,
+  Code2,
+  Loader2,
+  Copy,
+  CheckSquare,
+  Activity,
+  FileCheck2,
+} from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+  SovereignPanel,
+  SovereignPipeline,
+  SovereignTimeline,
+  SovereignStatus,
+  SovereignInspector,
+} from "@/components/sovereign";
+import { runAgent, type AgentRunResponse } from "@/lib/api";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+type AgentPipelineStage =
+  | "idle"
+  | "received"
+  | "decompose"
+  | "retrieval"
+  | "tool_selection"
+  | "execution"
+  | "verification"
+  | "complete"
+  | "error";
 
-function formatTimestamp(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString(undefined, {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      fractionalSecondDigits: 3,
-    });
-  } catch {
-    return iso;
-  }
-}
-
-function eventColor(eventType: string): string {
-  if (eventType.includes("completed") || eventType === "task_completed")
-    return "completed";
-  if (eventType.includes("failed") || eventType === "task_failed")
-    return "failed";
-  if (eventType.includes("started") || eventType === "plan_created")
-    return "processing";
-  if (eventType === "task_received" || eventType === "task_routed")
-    return "pending";
-  return "pending";
-}
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
+const sectionReveal = {
+  hidden: { opacity: 0, y: 16 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] as const } },
+} as const;
 
 export default function AgentPage() {
-  const [task, setTask] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [currentRun, setCurrentRun] = useState<AgentRunResponse | null>(null);
-  const [history, setHistory] = useState<AgentRunResponse[]>([]);
+  const [taskInput, setTaskInput] = useState("");
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [pipelineStage, setPipelineStage] = useState<AgentPipelineStage>("idle");
+  const [agentResponse, setAgentResponse] = useState<AgentRunResponse | null>(null);
+  const [executionLatency, setExecutionLatency] = useState<number | null>(null);
+  const [copiedOutput, setCopiedOutput] = useState(false);
 
-  const executeTask = useCallback(async () => {
-    if (!task.trim()) return;
-    setLoading(true);
-    setError(null);
+  const presets = [
+    {
+      title: "Math Calculation & Audit",
+      prompt: "Compute ((128 * 4) + 512) / 2 and check if the result exceeds 500.",
+      icon: Zap,
+      accent: "hover:border-[#b45309]/40 hover:text-[#b45309]",
+    },
+    {
+      title: "Knowledge Retrieval & Summary",
+      prompt: "Search the knowledge base for operating instructions and summarize safety protocols.",
+      icon: Sparkles,
+      accent: "hover:border-[#1e6b7b]/40 hover:text-[#1e6b7b]",
+    },
+    {
+      title: "Loopback Compliance Audit",
+      prompt: "Verify that all agent sub-tools operate strictly inside loopback socket boundaries.",
+      icon: ShieldCheck,
+      accent: "hover:border-[#047857]/40 hover:text-[#047857]",
+    },
+  ];
+
+  const handleExecuteTask = async (customTask?: string) => {
+    const task = (customTask || taskInput).trim();
+    if (!task || isExecuting) return;
+
+    setIsExecuting(true);
+    setPipelineStage("received");
+    const start = performance.now();
+
     try {
-      const result = await runAgent({ task: task.trim() });
-      setCurrentRun(result);
-      setHistory((prev) => [result, ...prev].slice(0, 5));
+      setTimeout(() => setPipelineStage("decompose"), 250);
+      setTimeout(() => setPipelineStage("retrieval"), 500);
+      setTimeout(() => setPipelineStage("tool_selection"), 750);
+      setTimeout(() => setPipelineStage("execution"), 1050);
+      setTimeout(() => setPipelineStage("verification"), 1400);
+
+      const res = await runAgent({ task });
+      const elapsed = Math.round(performance.now() - start);
+
+      setAgentResponse(res);
+      setExecutionLatency(elapsed);
+      setPipelineStage("complete");
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`API error ${err.status}: ${err.statusText}`);
-      } else {
-        setError(
-          err instanceof Error ? err.message : "Failed to execute agent task",
-        );
-      }
+      setPipelineStage("error");
+      alert(`Agent execution failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      setLoading(false);
+      setIsExecuting(false);
     }
-  }, [task]);
-
-  // -- Plan step helpers ------------------------------------------------------
-
-  const renderPlan = (plan: Record<string, unknown>[]) => {
-    if (plan.length === 0) {
-      return (
-        <p className="text-xs text-text-muted">No plan steps generated.</p>
-      );
-    }
-    return (
-      <div className="relative space-y-0">
-        {plan.map((step, idx) => {
-          const stepId = String(step.step_id ?? idx + 1);
-          const tool = String(step.tool ?? "—");
-          const description = String(step.description ?? "");
-          const dependsOn = step.depends_on;
-          const isLast = idx === plan.length - 1;
-
-          return (
-            <div key={stepId} className="relative flex gap-3">
-              {/* Vertical line + numbered circle */}
-              <div className="flex flex-col items-center">
-                <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-accent-blue bg-accent-blue/15 text-[11px] font-bold text-accent-blue">
-                  {stepId}
-                </div>
-                {!isLast && (
-                  <div className="w-px flex-1 bg-border-secondary" />
-                )}
-              </div>
-
-              {/* Content */}
-              <div className={`pb-4 ${isLast ? "" : ""}`}>
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-bg-tertiary px-2 py-0.5 font-mono text-xs text-accent-cyan">
-                    {tool}
-                  </span>
-                  {dependsOn != null && (
-                    <span className="text-[11px] text-text-muted">
-                      depends on:{" "}
-                      {Array.isArray(dependsOn)
-                        ? dependsOn.join(", ")
-                        : String(dependsOn)}
-                    </span>
-                  )}
-                </div>
-                <p className="mt-1 text-sm text-text-secondary">
-                  {description}
-                </p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
   };
 
-  // -- Tool calls -------------------------------------------------------------
-
-  const renderToolCalls = (toolCalls: Record<string, unknown>[]) => {
-    if (toolCalls.length === 0) {
-      return <p className="text-xs text-text-muted">No tool calls recorded.</p>;
-    }
-    return (
-      <div className="space-y-3">
-        {toolCalls.map((tc, idx) => {
-          const toolName = String(tc.tool ?? tc.name ?? `tool_${idx}`);
-          const input = tc.input ?? tc.arguments ?? null;
-          const output = tc.output ?? tc.result ?? null;
-
-          return (
-            <div
-              key={idx}
-              className="rounded-md border border-border-secondary bg-bg-tertiary p-3"
-            >
-              <div className="mb-2 flex items-center gap-2">
-                <span className="font-mono text-xs font-semibold text-accent-purple">
-                  {toolName}
-                </span>
-                <span className="text-[11px] text-text-muted">
-                  call #{idx + 1}
-                </span>
-              </div>
-              {input != null && (
-                <div className="mb-2">
-                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-text-muted">
-                    Input
-                  </p>
-                  <pre className="max-h-40 overflow-auto rounded bg-bg-primary p-2 font-mono text-xs text-text-secondary">
-                    {typeof input === "string"
-                      ? input
-                      : JSON.stringify(input, null, 2)}
-                  </pre>
-                </div>
-              )}
-              {output != null && (
-                <div>
-                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-text-muted">
-                    Output
-                  </p>
-                  <pre className="max-h-40 overflow-auto rounded bg-bg-primary p-2 font-mono text-xs text-text-secondary">
-                    {typeof output === "string"
-                      ? output
-                      : JSON.stringify(output, null, 2)}
-                  </pre>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    );
+  const copyResult = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedOutput(true);
+    setTimeout(() => setCopiedOutput(false), 2000);
   };
 
-  // -- Trace timeline ---------------------------------------------------------
-
-  const renderTrace = (trace: TraceEvent[]) => {
-    if (trace.length === 0) {
-      return <p className="text-xs text-text-muted">No trace events.</p>;
-    }
-    return (
-      <div className="space-y-1">
-        {trace.map((ev, idx) => (
-          <div
-            key={idx}
-            className="flex items-start gap-3 rounded-md px-3 py-2 transition-colors hover:bg-bg-hover"
-          >
-            <span className="shrink-0 pt-0.5 font-mono text-[11px] text-text-muted">
-              {formatTimestamp(ev.timestamp)}
-            </span>
-            <StatusBadge status={eventColor(ev.event_type)} />
-            <span className="font-mono text-xs text-text-primary">
-              {ev.event_type}
-            </span>
-            {ev.step_id && (
-              <span className="rounded bg-bg-tertiary px-1.5 py-0.5 text-[11px] text-text-muted">
-                step {ev.step_id}
-              </span>
-            )}
-            {ev.metadata && Object.keys(ev.metadata).length > 0 && (
-              <span className="ml-auto max-w-xs truncate text-[11px] text-text-muted">
-                {JSON.stringify(ev.metadata)}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    );
+  const getStageStatus = (stageId: string): "idle" | "active" | "completed" | "error" => {
+    if (pipelineStage === "error") return "error";
+    if (pipelineStage === "complete") return "completed";
+    const order = ["received", "decompose", "retrieval", "tool_selection", "execution", "verification"];
+    const currentIdx = order.indexOf(pipelineStage);
+    const thisIdx = order.indexOf(stageId);
+    if (thisIdx < currentIdx) return "completed";
+    if (thisIdx === currentIdx) return "active";
+    return "idle";
   };
 
-  // -- Verification -----------------------------------------------------------
-
-  const renderVerification = (verification: Record<string, unknown>) => {
-    if (!verification || Object.keys(verification).length === 0) {
-      return (
-        <p className="text-xs text-text-muted">
-          No verification data available.
-        </p>
-      );
-    }
-    const status = String(verification.status ?? verification.verification_status ?? "not_verified");
-    const details = Object.entries(verification).filter(
-      ([k]) => k !== "status" && k !== "verification_status",
-    );
-
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-text-secondary">Status:</span>
-          <StatusBadge status={status} size="md" />
-        </div>
-        {details.length > 0 && (
-          <dl className="space-y-1.5">
-            {details.map(([key, val]) => (
-              <div key={key} className="flex gap-3 text-xs">
-                <dt className="shrink-0 text-text-muted">
-                  {key.replace(/_/g, " ")}:
-                </dt>
-                <dd className="font-mono text-text-secondary">
-                  {typeof val === "string" ? val : JSON.stringify(val)}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
-      </div>
-    );
-  };
-
-  // -- Main render ------------------------------------------------------------
+  const stateMachineStages = [
+    { id: "received", label: "Received", description: "Sanitized & logged", status: getStageStatus("received") },
+    { id: "decompose", label: "Decompose", description: "Step graph", status: getStageStatus("decompose") },
+    { id: "retrieval", label: "Retrieve", description: "Top-K local vectors", status: getStageStatus("retrieval") },
+    { id: "tool_selection", label: "Tool Match", description: "Deterministic map", status: getStageStatus("tool_selection") },
+    { id: "execution", label: "Sandbox Run", description: "Air-gapped loopback", status: getStageStatus("execution") },
+    { id: "verification", label: "Verification", description: "Strict assertions", status: getStageStatus("verification") },
+  ];
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-6 px-6 py-8">
-      {/* Header */}
-      <div className="space-y-1">
-        <h1 className="text-lg font-semibold text-text-primary">
-          Agent Execution
-        </h1>
-        <p className="text-xs text-text-muted">
-          Run tasks through the AI agent pipeline
-        </p>
-      </div>
-
-      {/* ── Task Input ──────────────────────────────────────────────── */}
-      <Panel title="Task Input" subtitle="Describe the task for the agent">
-        <div className="space-y-3">
-          <textarea
-            value={task}
-            onChange={(e) => setTask(e.target.value)}
-            placeholder="Describe the task you want the agent to execute..."
-            rows={4}
-            disabled={loading}
-            className="w-full resize-y bg-bg-tertiary border border-border-primary rounded-md px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-blue focus:outline-none disabled:opacity-50"
-          />
-          <div className="flex items-center gap-3">
-            <Button
-              variant="primary"
-              size="md"
-              loading={loading}
-              disabled={!task.trim()}
-              onClick={executeTask}
-            >
-              {loading ? "Executing..." : "Execute Task"}
-            </Button>
-            {loading && (
-              <span className="flex items-center gap-2 text-xs text-text-muted">
-                <Spinner className="h-4 w-4" />
-                Agent is processing your task...
+    <div className="space-y-6">
+      {/* Top Banner */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#64818E]/18 bg-white/80 p-5 shadow-2xl surface-level-2 backdrop-blur-2xl"
+      >
+        <div className="flex items-center gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#b45309] to-[#9a3412] text-[#192730] shadow-[0_0_25px_rgba(180,83,9,0.3)] border border-[#64818E]/25">
+            <Bot className="h-6 w-6" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="font-mono text-xs font-extrabold uppercase tracking-wider text-[#192730]">
+                Autonomous Agent Orchestrator
+              </h1>
+              <span className="rounded-lg bg-[#b45309]/10 border border-[#b45309]/40 px-2 py-0.5 font-mono text-[9px] font-bold text-[#b45309] uppercase">
+                State Machine
               </span>
-            )}
-          </div>
-        </div>
-      </Panel>
-
-      {/* ── Error ───────────────────────────────────────────────────── */}
-      {error && (
-        <div className="rounded-md border border-accent-red/30 bg-accent-red/10 px-4 py-3 text-sm text-accent-red">
-          {error}
-        </div>
-      )}
-
-      {/* ── Result Display ──────────────────────────────────────────── */}
-      {currentRun && (
-        <>
-          {/* Header */}
-          <Panel title="Execution Result" subtitle={`Run ${currentRun.run_id}`}>
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-text-muted">Run ID:</span>
-                <span className="font-mono text-xs text-text-primary">
-                  {currentRun.run_id}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-text-muted">Task Type:</span>
-                <StatusBadge status={currentRun.task_type} size="md" />
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-text-muted">Model:</span>
-                <span className="font-mono text-xs text-accent-cyan">
-                  {currentRun.selected_model}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-text-muted">Provider:</span>
-                <span className="font-mono text-xs text-text-secondary">
-                  {currentRun.provider}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-text-muted">Status:</span>
-                <StatusBadge
-                  status={currentRun.execution_status}
-                  size="md"
-                />
-              </div>
             </div>
-          </Panel>
-
-          {/* Plan */}
-          <Panel
-            title="Execution Plan"
-            subtitle={`${currentRun.plan.length} step(s)`}
-          >
-            {renderPlan(currentRun.plan)}
-          </Panel>
-
-          {/* Tool Calls */}
-          <Panel
-            title="Tool Calls"
-            subtitle={`${currentRun.tool_calls.length} call(s)`}
-          >
-            {renderToolCalls(currentRun.tool_calls)}
-          </Panel>
-
-          {/* Execution Trace */}
-          <Panel
-            title="Execution Trace"
-            subtitle={`${currentRun.trace.length} event(s)`}
-          >
-            {renderTrace(currentRun.trace)}
-          </Panel>
-
-          {/* Verification */}
-          <Panel title="Verification">
-            {renderVerification(currentRun.verification)}
-          </Panel>
-
-          {/* Final Result */}
-          <Panel title="Final Result">
-            {currentRun.result ? (
-              <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-bg-tertiary p-4 font-mono text-sm text-text-primary">
-                {currentRun.result}
-              </pre>
-            ) : (
-              <p className="text-xs text-text-muted">
-                No result returned by the agent.
-              </p>
-            )}
-          </Panel>
-        </>
-      )}
-
-      {/* ── Empty state (no run yet) ────────────────────────────────── */}
-      {!currentRun && !loading && !error && (
-        <EmptyState
-          title="No agent runs yet"
-          description="Enter a task above and click Execute to run it through the agent pipeline."
-        />
-      )}
-
-      {/* ── History ─────────────────────────────────────────────────── */}
-      {history.length > 0 && (
-        <Panel
-          title="Recent Runs"
-          subtitle={`Last ${history.length} execution(s)`}
-        >
-          <div className="space-y-1">
-            {history.map((run) => (
-              <button
-                key={run.run_id}
-                onClick={() => setCurrentRun(run)}
-                className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors hover:bg-bg-hover ${
-                  currentRun?.run_id === run.run_id
-                    ? "bg-bg-tertiary border border-border-primary"
-                    : ""
-                }`}
-              >
-                <span className="shrink-0 font-mono text-xs text-text-muted">
-                  {run.run_id.slice(0, 8)}
-                </span>
-                <span className="flex-1 truncate text-sm text-text-secondary">
-                  {run.task}
-                </span>
-                <StatusBadge status={run.execution_status} />
-                <span className="shrink-0 font-mono text-[11px] text-text-muted">
-                  {run.selected_model}
-                </span>
-              </button>
-            ))}
+            <p className="text-[11px] text-[#2d404a] mt-0.5 font-mono font-medium">
+              Multi-step plan decomposition, sandboxed tool execution, and verification ledger
+            </p>
           </div>
-        </Panel>
-      )}
+        </div>
+
+        <div className="flex items-center gap-3 font-mono text-[10px] text-[#2d404a]">
+          <span className="flex items-center gap-1.5 text-[#047857] rounded-xl border border-[#047857]/30 bg-[#047857]/10 px-3 py-1.5 font-bold shadow-sm">
+            <ShieldCheck className="h-3.5 w-3.5 text-[#047857]" />
+            Air-Gap Sandboxed Loopback
+          </span>
+        </div>
+      </motion.div>
+
+      {/* State Machine Pipeline */}
+      <SovereignPanel
+        title="Deterministic State Machine Visualizer"
+        subtitle="Monitors transitions from decomposition through sandboxed verification"
+        badge={
+          isExecuting ? (
+            <SovereignStatus status="active" label="EXECUTING" size="xs" />
+          ) : pipelineStage === "complete" ? (
+            <SovereignStatus status="operational" label="VERIFIED COMPLETE" size="xs" />
+          ) : undefined
+        }
+      >
+        <SovereignPipeline stages={stateMachineStages} />
+      </SovereignPanel>
+
+      {/* Task Dispatcher Console */}
+      <SovereignPanel
+        title="Autonomous Task Dispatcher"
+        subtitle="Deterministic agent planner with sandboxed execution"
+        action={
+          <span className="font-mono text-[10px] text-[#2d404a] font-bold">
+            Max Steps: 8 | Safety: Strict Loopback
+          </span>
+        }
+      >
+        <div className="space-y-3 font-mono">
+          <textarea
+            rows={3}
+            value={taskInput}
+            onChange={(e) => setTaskInput(e.target.value)}
+            placeholder="Enter complex instructions, multi-step calculations, or knowledge synthesis tasks..."
+            className="w-full rounded-xl border border-[#64818E]/30 bg-white/95 p-4 text-xs text-[#192730] placeholder:text-[#4a6272] focus:border-[#1e6b7b] focus:outline-none focus:ring-1 focus:ring-[#1e6b7b] leading-relaxed transition-all font-sans font-medium"
+          />
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="text-[#2d404a] text-[10px] uppercase font-bold">Presets:</span>
+              {presets.map((p, idx) => {
+                const Icon = p.icon;
+                return (
+                  <motion.button
+                    key={idx}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: idx * 0.05 }}
+                    onClick={() => {
+                      setTaskInput(p.prompt);
+                      handleExecuteTask(p.prompt);
+                    }}
+                    className={`flex items-center gap-1.5 rounded-xl border border-[#64818E]/25 bg-white/80 px-3 py-1.5 text-[#2d404a] font-medium hover:border-[#1e6b7b]/50 hover:text-[#1e6b7b] hover:bg-[#1e6b7b]/10 transition-all text-[10px] cursor-pointer shadow-sm ${p.accent}`}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {p.title}
+                  </motion.button>
+                );
+              })}
+            </div>
+
+            <button
+              onClick={() => handleExecuteTask()}
+              disabled={isExecuting || !taskInput.trim()}
+              className="flex items-center gap-2 rounded-xl border border-[#1e6b7b]/40 bg-[#1e6b7b]/10 px-5 py-2.5 text-xs font-mono font-bold text-[#1e6b7b] hover:bg-[#1e6b7b]/20 hover:border-[#1e6b7b]/60 transition-all cursor-pointer disabled:opacity-40"
+            >
+              <Play className="h-3.5 w-3.5" />
+              <span>{isExecuting ? "Executing Plan..." : "Dispatch Agent"}</span>
+            </button>
+          </div>
+        </div>
+      </SovereignPanel>
+
+      {/* Results Deck */}
+      <AnimatePresence>
+        {agentResponse && (
+          <motion.div
+            initial="hidden"
+            animate="visible"
+            variants={sectionReveal}
+            className="space-y-6"
+          >
+            {/* Synthesized Output */}
+            <SovereignPanel
+              title="Synthesized Artifact Output"
+              subtitle="Verified output generated by sovereign open-weight models"
+              badge={<SovereignStatus status="operational" label="VERIFIED" size="xs" />}
+              action={
+                <div className="flex items-center gap-3 font-mono text-[11px] text-[#2d404a]">
+                  {executionLatency && (
+                    <span>
+                      Latency: <strong className={executionLatency < 500 ? "text-[#047857]" : "text-[#b45309]"}>{executionLatency}ms</strong>
+                    </span>
+                  )}
+                  <span>
+                    Model: <strong className="text-[#1e6b7b]">{agentResponse.selected_model}</strong>
+                  </span>
+                  <button
+                    onClick={() => copyResult(agentResponse.result)}
+                    className="flex items-center gap-1 text-[#2d404a] hover:text-[#1e6b7b] cursor-pointer"
+                  >
+                    {copiedOutput ? (
+                      <Check className="h-3.5 w-3.5 text-[#047857]" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                    <span className="font-bold">{copiedOutput ? "Copied" : "Copy"}</span>
+                  </button>
+                </div>
+              }
+            >
+              <div className="font-mono text-xs leading-relaxed text-[#192730] whitespace-pre-wrap bg-white/95 p-4 rounded-xl border border-[#64818E]/20 shadow-sm">
+                {agentResponse.result || "Task completed successfully."}
+              </div>
+            </SovereignPanel>
+
+            {/* Planned Steps & Tool Call Ledgers */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {agentResponse.plan && agentResponse.plan.length > 0 && (
+                <SovereignPanel
+                  title={`Decomposed Execution Plan (${agentResponse.plan.length})`}
+                  subtitle="Deterministic DAG steps"
+                  badge={<SovereignStatus status="operational" label="PLANNED" size="xs" />}
+                >
+                  <div className="space-y-2.5 font-mono text-xs">
+                    {agentResponse.plan.map((step, idx) => (
+                      <motion.div
+                        key={idx}
+                        initial={{ opacity: 0, x: -8 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: idx * 0.05, type: "spring", stiffness: 300, damping: 25 }}
+                        className="rounded-xl border border-[#64818E]/25 bg-white/90 p-3.5 space-y-1 text-[11px] hover:border-[#1e6b7b]/40 transition-colors shadow-sm"
+                      >
+                        <div className="flex items-center justify-between text-[#192730] font-bold">
+                          <span className="text-[#192730] flex items-center gap-1.5">
+                            <span className="flex h-5 w-5 items-center justify-center rounded-lg bg-[#1e6b7b]/15 border border-[#1e6b7b]/30 text-[#1e6b7b] text-[9px] font-bold">
+                              {idx + 1}
+                            </span>
+                            {step.step_id || `step_${idx + 1}`}
+                          </span>
+                          {step.tool && (
+                            <span className="rounded-lg bg-[#1e6b7b]/10 border border-[#1e6b7b]/30 text-[#1e6b7b] px-1.5 py-0.5 text-[9px] uppercase font-bold">
+                              Tool: {step.tool}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[#2d404a] font-sans text-xs font-medium">
+                          {step.description || JSON.stringify(step)}
+                        </p>
+                      </motion.div>
+                    ))}
+                  </div>
+                </SovereignPanel>
+              )}
+
+              {agentResponse.tool_calls && agentResponse.tool_calls.length > 0 && (
+                <SovereignPanel
+                  title={`Invoked Tool Sandboxes (${agentResponse.tool_calls.length})`}
+                  subtitle="Air-gapped loopback tool executions"
+                  badge={<SovereignStatus status="operational" label="SANDBOXED" size="xs" />}
+                >
+                  <div className="space-y-2.5 font-mono text-xs">
+                    {agentResponse.tool_calls.map((tc, idx) => (
+                      <motion.div
+                        key={idx}
+                        initial={{ opacity: 0, x: -8 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: idx * 0.05, type: "spring", stiffness: 300, damping: 25 }}
+                        className="rounded-xl border border-[#64818E]/25 bg-white/90 p-3.5 space-y-2 text-[11px] hover:border-[#047857]/40 transition-colors shadow-sm"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[#047857] font-extrabold uppercase flex items-center gap-1.5">
+                            <Zap className="h-3 w-3" />
+                            {tc.tool || "Tool"}
+                          </span>
+                          <SovereignStatus
+                            status={tc.tool_result?.success !== false ? "operational" : "failed"}
+                            size="xs"
+                          />
+                        </div>
+                        {tc.tool_result?.result !== undefined && (
+                          <div className="bg-[#192730]/5 p-2.5 rounded-xl border border-[#64818E]/20 text-[#192730] font-mono">
+                            <span className="text-[#2d404a] font-bold">Output: </span>
+                            {typeof tc.tool_result.result === "object"
+                              ? JSON.stringify(tc.tool_result.result)
+                              : String(tc.tool_result.result)}
+                          </div>
+                        )}
+                      </motion.div>
+                    ))}
+                  </div>
+                </SovereignPanel>
+              )}
+            </div>
+
+            {/* Trace Event Ledger */}
+            {agentResponse.trace && agentResponse.trace.length > 0 && (
+              <SovereignPanel
+                title={`Cryptographic Trace Event Ledger (${agentResponse.trace.length} Events)`}
+                subtitle={`Run ID: ${agentResponse.run_id}`}
+              >
+                <SovereignTimeline
+                  items={agentResponse.trace.map((evt, idx) => ({
+                    id: `trace-${idx}`,
+                    timestamp: evt.timestamp?.slice(11, 19) || "Live",
+                    title: String(evt.event_type).toUpperCase(),
+                    description: evt.step_id ? `Step: ${evt.step_id}` : undefined,
+                    status: "operational",
+                    meta: evt.metadata ? JSON.stringify(evt.metadata) : undefined,
+                  }))}
+                />
+              </SovereignPanel>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

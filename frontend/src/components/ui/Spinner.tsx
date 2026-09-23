@@ -1,8 +1,20 @@
-export default function Spinner({ className = "h-5 w-5" }: { className?: string }) {
+"use client";
+
+import React from "react";
+import { Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+
+export default function Spinner({
+  className = "h-5 w-5",
+  label,
+}: {
+  className?: string;
+  label?: string;
+}) {
   return (
-    <svg className={`animate-spin text-text-muted ${className}`} fill="none" viewBox="0 0 24 24">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-    </svg>
+    <div className="flex items-center gap-2.5 justify-center">
+      <Loader2 className={cn("animate-spin text-[#1e6b7b]", className)} />
+      {label && <span className="text-xs text-[#2d404a] font-medium">{label}</span>}
+    </div>
   );
 }

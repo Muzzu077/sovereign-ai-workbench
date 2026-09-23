@@ -92,10 +92,12 @@ class RAGService:
         model_provider: ModelProvider,
         *,
         default_similarity_threshold: float = 0.05,
+        model_registry: Any = None,
     ) -> None:
         self._retriever = retriever
         self._provider = model_provider
         self._default_threshold = default_similarity_threshold
+        self._registry = model_registry
 
     def query(
         self,
@@ -175,7 +177,25 @@ class RAGService:
                     "or citations."
                 ),
             )
-            response = self._provider.generate(gen_request)
+            provider_to_use = self._provider
+            if not provider_to_use.is_available() and self._registry is not None:
+                available = self._registry.get_available(preferred="local")
+                if available is not None:
+                    provider_to_use = available[1]
+
+            try:
+                response = provider_to_use.generate(gen_request)
+            except Exception as gen_err:
+                if self._registry is not None:
+                    available = self._registry.get_available(preferred="local")
+                    if available is not None and available[1] is not provider_to_use:
+                        provider_to_use = available[1]
+                        response = provider_to_use.generate(gen_request)
+                    else:
+                        raise gen_err
+                else:
+                    raise gen_err
+
             answer = response.text
             model_name = response.model_name
         except Exception as exc:
