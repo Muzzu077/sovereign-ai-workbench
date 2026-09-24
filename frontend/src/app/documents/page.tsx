@@ -1,443 +1,660 @@
 "use client";
 
-import React, { useEffect, useState, useRef, useCallback } from "react";
-import {
-  FileText,
-  Upload,
-  Trash2,
-  Eye,
-  CheckCircle2,
-  AlertCircle,
-  HardDrive,
-  RefreshCw,
-  Search,
-  FileCode,
-  Loader2,
-  ShieldCheck,
-  Zap,
-  ArrowRight,
-} from "lucide-react";
-import { formatBytes, formatRelativeTime } from "@/lib/utils";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  SovereignPanel,
-  SovereignPipeline,
-  SovereignStatus,
-  SovereignInspector,
-} from "@/components/sovereign";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import AppShell from "@/components/shell/AppShell";
 import {
   listFiles,
   uploadFile,
   deleteFile,
   analyzeDocument,
   ingestDocument,
-  type FileInfo,
-  type FileListResponse,
-  type FileUploadResponse,
-} from "@/lib/api";
+} from "@/lib/api/client";
+import type { FileInfo, AnalysisResult } from "@/lib/api/types";
+import { cn, formatBytes, formatRelativeTime, copyToClipboard } from "@/lib/utils";
+import {
+  Upload,
+  Trash2,
+  FileText,
+  Search as SearchIcon,
+  BookOpen,
+  Loader2,
+  AlertCircle,
+  ChevronRight,
+  RefreshCw,
+  Copy,
+  Check,
+  Sparkles,
+  ShieldAlert,
+  ListChecks,
+  X,
+  FileCode,
+} from "lucide-react";
 
-type ProcessingStage =
-  | "idle"
-  | "received"
-  | "extract"
-  | "parse"
-  | "chunk"
-  | "embed"
-  | "index"
-  | "ready"
-  | "error";
+interface DocumentWithAnalysis extends FileInfo {
+  analysis?: AnalysisResult;
+  analyzing?: boolean;
+  ingesting?: boolean;
+  ingestSuccess?: boolean;
+}
 
-const rowVariants = {
-  hidden: { opacity: 0, x: -12 },
-  visible: (i: number) => ({
-    opacity: 1,
-    x: 0,
-    transition: { delay: i * 0.04, type: "spring" as const, stiffness: 300, damping: 25 },
-  }),
-};
+function FileTypeBadge({ extension }: { extension: string }) {
+  const ext = extension.toLowerCase();
+  const label = ext.toUpperCase() || "FILE";
+
+  const colorMap: Record<string, string> = {
+    pdf: "bg-red-50 text-red-700 border-red-200",
+    docx: "bg-sky-50 text-sky-700 border-sky-200",
+    doc: "bg-sky-50 text-sky-700 border-sky-200",
+    txt: "bg-stone-100 text-stone-600 border-stone-200",
+  };
+
+  const colorClass = colorMap[ext] ?? "bg-stone-100 text-stone-500 border-stone-200";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center justify-center",
+        "w-8 h-7 rounded border shrink-0",
+        "text-[9px] font-bold font-mono uppercase tracking-wider leading-none",
+        colorClass,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, { bg: string; text: string; dot: string; label: string }> = {
+    completed: {
+      bg: "bg-[var(--color-wb-success-bg)]",
+      text: "text-[var(--color-wb-success)]",
+      dot: "bg-[var(--color-wb-success)]",
+      label: "Extracted",
+    },
+    pending: {
+      bg: "bg-[var(--color-wb-warning-bg)]",
+      text: "text-[var(--color-wb-warning)]",
+      dot: "bg-[var(--color-wb-warning)]",
+      label: "Pending",
+    },
+    processing: {
+      bg: "bg-[var(--color-wb-info-bg)]",
+      text: "text-[var(--color-wb-info)]",
+      dot: "bg-[var(--color-wb-info)]",
+      label: "Processing",
+    },
+    failed: {
+      bg: "bg-[var(--color-wb-error-bg)]",
+      text: "text-[var(--color-wb-error)]",
+      dot: "bg-[var(--color-wb-error)]",
+      label: "Failed",
+    },
+  };
+  const s = map[status] || map.pending;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium leading-none",
+        s.bg,
+        s.text,
+      )}
+    >
+      <span className={cn("h-1.5 w-1.5 rounded-full", s.dot)} />
+      {s.label}
+    </span>
+  );
+}
 
 export default function DocumentsPage() {
-  const [documents, setDocuments] = useState<FileInfo[]>([]);
+  const [documents, setDocuments] = useState<DocumentWithAnalysis[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isUploading, setIsUploading] = useState(false);
-  const [pipelineStage, setPipelineStage] = useState<ProcessingStage>("idle");
-  const [stageMessage, setStageMessage] = useState<string>("");
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [selectedDoc, setSelectedDoc] = useState<FileInfo | null>(null);
-  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
-  const [isDragOver, setIsDragOver] = useState(false);
-
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [copiedPreview, setCopiedPreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchDocs = useCallback(async () => {
+  const fetchDocuments = useCallback(async () => {
     try {
       setLoading(true);
-      const res: FileListResponse = await listFiles();
-      setDocuments(res.files || []);
+      setError(null);
+      const response = await listFiles();
+      setDocuments(response.files.map((f) => ({ ...f })));
     } catch (err) {
-      console.error("Failed to load files", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to load documents",
+      );
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchDocs();
-  }, [fetchDocs]);
+    fetchDocuments();
+  }, [fetchDocuments]);
 
-  const handleFileUpload = async (file: File) => {
-    if (!file) return;
-    setIsUploading(true);
-    setUploadError(null);
-
-    setPipelineStage("received");
-    setStageMessage(`Validating ${file.name} (${formatBytes(file.size)})...`);
-
-    try {
-      const uploadRes: FileUploadResponse = await uploadFile(file);
-
-      setPipelineStage("extract");
-      setStageMessage("Extracting text and decoding format tokens...");
-      await analyzeDocument(uploadRes.document_id);
-
-      setPipelineStage("parse");
-      setStageMessage("Parsing layout hierarchy and tables...");
-
-      setPipelineStage("chunk");
-      setStageMessage("Partitioning semantic chunk boundaries...");
-
-      setPipelineStage("embed");
-      setStageMessage("Vectorizing chunks with local embedding model...");
-      await ingestDocument(uploadRes.document_id);
-
-      setPipelineStage("index");
-      setStageMessage("Writing vectors to in-memory index...");
-
-      setPipelineStage("ready");
-      setStageMessage("Document indexed and available for RAG.");
-      await fetchDocs();
-
-      setTimeout(() => {
-        setIsUploading(false);
-        setPipelineStage("idle");
-      }, 2000);
-    } catch (err) {
-      setPipelineStage("error");
-      setUploadError(err instanceof Error ? err.message : "Document ingestion failed.");
-      setTimeout(() => setIsUploading(false), 3000);
+  // Select first document automatically when list loads if none selected
+  useEffect(() => {
+    if (!selected && documents.length > 0) {
+      setSelected(documents[0].document_id);
     }
-  };
+  }, [documents, selected]);
 
-  const handleDelete = async (docId: string, name: string) => {
-    if (!confirm(`Permanently delete document "${name}" from sovereign storage?`)) return;
-    try {
-      await deleteFile(docId);
-      setDocuments((prev) => prev.filter((d) => d.document_id !== docId));
-    } catch (err) {
-      alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
+  const handleUpload = useCallback(
+    async (files: FileList | File[]) => {
+      setUploading(true);
+      setError(null);
+      try {
+        const fileArr = Array.from(files);
+        for (const file of fileArr) {
+          const res = await uploadFile(file);
+          // If we have a new doc, select it
+          if (res?.document_id) {
+            setSelected(res.document_id);
+          }
+        }
+        await fetchDocuments();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Upload failed");
+      } finally {
+        setUploading(false);
+      }
+    },
+    [fetchDocuments],
+  );
 
-  const handleInspectDoc = (doc: FileInfo) => {
-    setSelectedDoc(doc);
-    setIsInspectorOpen(true);
-  };
+  const handleDelete = useCallback(
+    async (docId: string) => {
+      try {
+        await deleteFile(docId);
+        setDocuments((prev) => prev.filter((d) => d.document_id !== docId));
+        if (selected === docId) {
+          const remaining = documents.filter((d) => d.document_id !== docId);
+          setSelected(remaining.length > 0 ? remaining[0].document_id : null);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Delete failed");
+      }
+    },
+    [selected, documents],
+  );
 
-  const filteredDocs = documents.filter((d) => {
-    const q = searchQuery.toLowerCase();
-    return (
-      (d.filename || "").toLowerCase().includes(q) ||
-      (d.file_type || "").toLowerCase().includes(q) ||
-      d.document_id.toLowerCase().includes(q)
+  const handleAnalyze = useCallback(async (docId: string) => {
+    setDocuments((prev) =>
+      prev.map((d) =>
+        d.document_id === docId ? { ...d, analyzing: true } : d,
+      ),
     );
-  });
+    try {
+      const result = await analyzeDocument(docId);
+      setDocuments((prev) =>
+        prev.map((d) =>
+          d.document_id === docId
+            ? { ...d, analysis: result, analyzing: false }
+            : d,
+        ),
+      );
+    } catch (err) {
+      setDocuments((prev) =>
+        prev.map((d) =>
+          d.document_id === docId ? { ...d, analyzing: false } : d,
+        ),
+      );
+      setError(err instanceof Error ? err.message : "Analysis failed");
+    }
+  }, []);
 
-  const getPipelineStageStatus = (stageId: string): "idle" | "active" | "completed" | "error" => {
-    if (pipelineStage === "error") return "error";
-    if (pipelineStage === "ready") return "completed";
-    const order = ["received", "extract", "parse", "chunk", "embed", "index"];
-    const currentIdx = order.indexOf(pipelineStage);
-    const thisIdx = order.indexOf(stageId);
-    if (thisIdx < currentIdx) return "completed";
-    if (thisIdx === currentIdx) return "active";
-    return "idle";
+  const handleIngest = useCallback(async (docId: string) => {
+    setDocuments((prev) =>
+      prev.map((d) =>
+        d.document_id === docId ? { ...d, ingesting: true } : d,
+      ),
+    );
+    try {
+      await ingestDocument(docId);
+      setDocuments((prev) =>
+        prev.map((d) =>
+          d.document_id === docId
+            ? { ...d, ingesting: false, ingestSuccess: true }
+            : d,
+        ),
+      );
+      setTimeout(() => {
+        setDocuments((prev) =>
+          prev.map((d) =>
+            d.document_id === docId ? { ...d, ingestSuccess: false } : d,
+          ),
+        );
+      }, 3000);
+    } catch (err) {
+      setDocuments((prev) =>
+        prev.map((d) =>
+          d.document_id === docId ? { ...d, ingesting: false } : d,
+        ),
+      );
+      setError(err instanceof Error ? err.message : "Ingestion failed");
+    }
+  }, []);
+
+  const handleCopyPreview = async (text: string) => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopiedPreview(true);
+      setTimeout(() => setCopiedPreview(false), 2000);
+    }
   };
 
-  const stagesList = [
-    { id: "received", label: "Document", description: "Binary validated", status: getPipelineStageStatus("received") },
-    { id: "extract", label: "Extract", description: "Raw text decoded", status: getPipelineStageStatus("extract") },
-    { id: "parse", label: "Parse", description: "Layout recognized", status: getPipelineStageStatus("parse") },
-    { id: "chunk", label: "Chunk", description: "Token boundaries", status: getPipelineStageStatus("chunk") },
-    { id: "embed", label: "Embed", description: "Dense vectorization", status: getPipelineStageStatus("embed") },
-    { id: "index", label: "Index", description: "FAISS sync", status: getPipelineStageStatus("index") },
-  ];
+  const filtered = documents.filter((d) =>
+    d.filename.toLowerCase().includes(searchTerm.toLowerCase()),
+  );
+
+  const selectedDoc = documents.find((d) => d.document_id === selected);
 
   return (
-    <div className="space-y-6">
-      {/* Top Banner */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#64818E]/18 bg-white/80 p-5 shadow-2xl surface-level-2 backdrop-blur-2xl"
-      >
-        <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 text-[#192730] shadow-[0_0_25px_rgba(16,185,129,0.3)] border border-[#64818E]/25">
-            <FileText className="h-6 w-6" />
-          </div>
-          <div>
+    <AppShell>
+      <div className="flex h-full">
+        {/* ── Left panel: Document list ──────────────────────────────── */}
+        <div className="flex w-96 flex-col border-r border-[var(--color-wb-border)] bg-[var(--color-wb-surface)]">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-[var(--color-wb-border)] px-4 py-3">
             <div className="flex items-center gap-2">
-              <h1 className="font-mono text-xs font-extrabold uppercase tracking-wider text-[#192730]">
-                Document Intelligence Hub
-              </h1>
-              <span className="rounded-lg bg-[#047857]/10 border border-[#047857]/40 px-2 py-0.5 font-mono text-[9px] font-bold text-[#047857] uppercase">
-                OCR & Ingestion
-              </span>
+              <h2 className="text-sm font-semibold text-[var(--color-wb-text)]">
+                Documents
+              </h2>
+              {documents.length > 0 && (
+                <span className="rounded-full bg-[var(--color-wb-bg-inset)] px-2 py-0.5 text-[10px] font-mono font-medium text-[var(--color-wb-text-secondary)] border border-[var(--color-wb-border-subtle)]">
+                  {documents.length}
+                </span>
+              )}
             </div>
-            <p className="text-[11px] text-[#2d404a] mt-0.5 font-mono font-medium">
-              Air-gapped ingestion pipeline for PDF, DOCX, and TXT manuals with semantic token chunking
-            </p>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={fetchDocuments}
+                className="rounded-md p-1.5 text-[var(--color-wb-text-muted)] hover:bg-[var(--color-wb-surface-hover)] hover:text-[var(--color-wb-text)] transition-colors cursor-pointer"
+                title="Refresh documents"
+                aria-label="Refresh documents"
+              >
+                <RefreshCw size={14} className={cn(loading && "animate-spin-smooth")} />
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1 rounded-md bg-[var(--color-wb-accent)] px-2.5 py-1 text-xs font-medium text-white hover:bg-[var(--color-wb-accent-hover)] transition-colors cursor-pointer shadow-sm"
+                title="Upload files"
+              >
+                <Upload size={13} />
+                <span>Upload</span>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.docx,.txt"
+                onChange={(e) => e.target.files && handleUpload(e.target.files)}
+                className="hidden"
+              />
+            </div>
+          </div>
+
+          {/* Search bar */}
+          <div className="border-b border-[var(--color-wb-border)] px-3 py-2">
+            <div className="relative flex items-center rounded-lg border border-[var(--color-wb-border)] bg-[var(--color-wb-bg)] px-2.5 py-1.5 focus-within:border-[var(--color-wb-accent)] transition-colors">
+              <SearchIcon size={13} className="text-[var(--color-wb-text-muted)] shrink-0 mr-2" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search documents by name..."
+                className="flex-1 bg-transparent text-xs text-[var(--color-wb-text)] placeholder:text-[var(--color-wb-text-muted)] outline-none"
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm("")}
+                  className="text-[var(--color-wb-text-muted)] hover:text-[var(--color-wb-text)] p-0.5"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* List & Drag area */}
+          <div
+            className={cn(
+              "relative flex-1 overflow-y-auto",
+              dragOver && "bg-[var(--color-wb-accent-subtle)]",
+            )}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              if (e.dataTransfer.files) handleUpload(e.dataTransfer.files);
+            }}
+          >
+            {/* Drag drop overlay */}
+            {dragOver && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[var(--color-wb-accent-subtle)]/90 border-2 border-dashed border-[var(--color-wb-accent)] pointer-events-none p-4 text-center">
+                <Upload size={24} className="text-[var(--color-wb-accent)] mb-2 animate-bounce" />
+                <span className="text-xs font-semibold text-[var(--color-wb-accent)]">
+                  Drop documents to upload
+                </span>
+                <span className="text-[10px] text-[var(--color-wb-text-muted)] mt-0.5">
+                  PDF, DOCX, TXT
+                </span>
+              </div>
+            )}
+
+            {/* Uploading indicator */}
+            {uploading && (
+              <div className="flex items-center gap-2 border-b border-[var(--color-wb-border)] bg-[var(--color-wb-accent-subtle)] px-4 py-2 text-xs text-[var(--color-wb-accent)] font-medium">
+                <Loader2 size={13} className="animate-spin-smooth" />
+                Uploading document...
+              </div>
+            )}
+
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-16 text-xs text-[var(--color-wb-text-muted)] gap-2">
+                <Loader2 size={18} className="animate-spin-smooth text-[var(--color-wb-accent)]" />
+                <span>Loading documents...</span>
+              </div>
+            ) : error ? (
+              <div className="m-3 flex items-start gap-2 rounded-lg bg-[var(--color-wb-error-bg)] border border-[var(--color-wb-error-border)] p-3 text-xs text-[var(--color-wb-error)]">
+                <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                <div className="flex-1">{error}</div>
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--color-wb-bg-inset)] border border-[var(--color-wb-border-subtle)] mb-3">
+                  <FileText size={18} className="text-[var(--color-wb-text-muted)]" />
+                </div>
+                <span className="text-xs font-semibold text-[var(--color-wb-text)]">
+                  {searchTerm ? "No documents found" : "No documents yet"}
+                </span>
+                <p className="mt-1 text-[11px] text-[var(--color-wb-text-muted)] max-w-[200px]">
+                  {searchTerm
+                    ? "Try a different search query"
+                    : "Upload files or drop them here to extract and analyze"}
+                </p>
+                {!searchTerm && (
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] px-3 py-1.5 text-xs font-medium text-[var(--color-wb-text-secondary)] hover:bg-[var(--color-wb-surface-hover)] transition-colors cursor-pointer"
+                  >
+                    <Upload size={12} />
+                    Browse Files
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="divide-y divide-[var(--color-wb-border)]">
+                {filtered.map((doc) => {
+                  const isSelected = selected === doc.document_id;
+                  return (
+                    <button
+                      key={doc.document_id}
+                      onClick={() => setSelected(doc.document_id)}
+                      className={cn(
+                        "group relative flex w-full items-center gap-3 px-4 py-3 text-left transition-colors cursor-pointer",
+                        isSelected
+                          ? "bg-[var(--color-wb-surface-active)]"
+                          : "hover:bg-[var(--color-wb-surface-hover)]",
+                      )}
+                    >
+                      {/* Selection accent bar */}
+                      {isSelected && (
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-[var(--color-wb-accent)]" />
+                      )}
+
+                      <FileTypeBadge extension={doc.file_type} />
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="truncate text-xs font-medium text-[var(--color-wb-text)]" title={doc.filename}>
+                            {doc.filename}
+                          </span>
+                        </div>
+
+                        <div className="mt-1 flex items-center gap-2 text-[10px] text-[var(--color-wb-text-muted)]">
+                          <span>{formatBytes(doc.file_size)}</span>
+                          <span>·</span>
+                          <span>{doc.page_count} {doc.page_count === 1 ? "page" : "pages"}</span>
+                          <span>·</span>
+                          <StatusBadge status={doc.extraction_status} />
+                        </div>
+                      </div>
+
+                      <ChevronRight
+                        size={13}
+                        className={cn(
+                          "shrink-0 text-[var(--color-wb-text-muted)] transition-transform",
+                          isSelected ? "translate-x-0.5 text-[var(--color-wb-accent)]" : "opacity-0 group-hover:opacity-100",
+                        )}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5 font-mono">
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={(e) => {
-              if (e.target.files?.[0]) handleFileUpload(e.target.files[0]);
-            }}
-            className="hidden"
-            accept=".pdf,.docx,.txt,.csv"
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
-            className="flex items-center gap-2 rounded-xl border border-[#1e6b7b]/40 bg-[#1e6b7b]/10 px-4 py-2 text-xs font-mono font-bold text-[#1e6b7b] hover:bg-[#1e6b7b]/20 hover:border-[#1e6b7b]/60 transition-all cursor-pointer disabled:opacity-40"
-          >
-            <Upload className="h-3.5 w-3.5 text-[#1e6b7b]" />
-            <span>Upload Document</span>
-          </button>
-          <button
-            onClick={fetchDocs}
-            className="flex items-center gap-1.5 rounded-xl border border-[#64818E]/30 bg-white/80 px-3 py-2 text-xs text-[#2d404a] hover:border-[#64818E]/50 hover:bg-[#64818E]/10 transition-all cursor-pointer font-mono font-medium"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin text-[#1e6b7b]" : "text-[#1e6b7b]"}`} />
-            <span>Refresh</span>
-          </button>
-        </div>
-      </motion.div>
+        {/* ── Right panel: Detail & Analysis ─────────────────────────── */}
+        <div className="flex flex-1 flex-col overflow-y-auto bg-[var(--color-wb-bg)]">
+          {selectedDoc ? (
+            <div className="mx-auto w-full max-w-3xl px-8 py-8 space-y-6">
+              {/* Document Header Card */}
+              <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-5 shadow-sm">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3.5 min-w-0">
+                    <FileTypeBadge extension={selectedDoc.file_type} />
+                    <div className="min-w-0">
+                      <h1 className="text-base font-semibold text-[var(--color-wb-text)] truncate" title={selectedDoc.filename}>
+                        {selectedDoc.filename}
+                      </h1>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2.5 text-xs text-[var(--color-wb-text-muted)]">
+                        <span className="font-mono text-[11px]">{formatBytes(selectedDoc.file_size)}</span>
+                        <span>·</span>
+                        <span>{selectedDoc.page_count} {selectedDoc.page_count === 1 ? "page" : "pages"}</span>
+                        <span>·</span>
+                        <StatusBadge status={selectedDoc.extraction_status} />
+                        <span>·</span>
+                        <span>Uploaded {formatRelativeTime(selectedDoc.created_at)}</span>
+                      </div>
+                    </div>
+                  </div>
 
-      {/* 6-Stage Real Pipeline Visualizer */}
-      <AnimatePresence>
-        {isUploading && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ type: "spring", stiffness: 300, damping: 30 }}
-          >
-            <SovereignPanel
-              title="Air-Gapped Ingestion Pipeline"
-              subtitle={stageMessage}
-              badge={<SovereignStatus status="active" label="PROCESSING" size="xs" />}
-              elevation={3}
-            >
-              <SovereignPipeline stages={stagesList} className="my-2" />
+                  <button
+                    onClick={() => handleDelete(selectedDoc.document_id)}
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--color-wb-text-muted)] hover:bg-[var(--color-wb-error-bg)] hover:text-[var(--color-wb-error)] transition-colors cursor-pointer"
+                    title="Delete document"
+                    aria-label="Delete document"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
 
-              {uploadError && (
-                <div className="mt-3 flex items-center gap-2 rounded-xl border border-[#be123c]/30 bg-[#be123c]/10 p-3 font-mono text-xs text-[#be123c]">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  <span>{uploadError}</span>
+                {/* Actions Toolbar */}
+                <div className="mt-5 flex items-center gap-2.5 border-t border-[var(--color-wb-border)] pt-4">
+                  <button
+                    onClick={() => handleAnalyze(selectedDoc.document_id)}
+                    disabled={selectedDoc.analyzing}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-medium transition-colors cursor-pointer shadow-sm",
+                      "bg-[var(--color-wb-accent)] text-white hover:bg-[var(--color-wb-accent-hover)]",
+                      "disabled:opacity-50 disabled:cursor-not-allowed",
+                    )}
+                  >
+                    {selectedDoc.analyzing ? (
+                      <>
+                        <Loader2 size={13} className="animate-spin-smooth" />
+                        <span>Analyzing with AI...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={13} />
+                        <span>Analyze Document</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={() => handleIngest(selectedDoc.document_id)}
+                    disabled={selectedDoc.ingesting}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-wb-text-secondary)] hover:bg-[var(--color-wb-surface-hover)] transition-colors cursor-pointer",
+                      selectedDoc.ingestSuccess && "border-[var(--color-wb-success-border)] text-[var(--color-wb-success)] bg-[var(--color-wb-success-bg)]",
+                      "disabled:opacity-50 disabled:cursor-not-allowed",
+                    )}
+                  >
+                    {selectedDoc.ingesting ? (
+                      <>
+                        <Loader2 size={13} className="animate-spin-smooth text-[var(--color-wb-accent)]" />
+                        <span>Ingesting chunks...</span>
+                      </>
+                    ) : selectedDoc.ingestSuccess ? (
+                      <>
+                        <Check size={13} className="text-[var(--color-wb-success)]" />
+                        <span>Ingested to RAG</span>
+                      </>
+                    ) : (
+                      <>
+                        <BookOpen size={13} />
+                        <span>Ingest to Knowledge Base</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Analysis Results (if available) */}
+              {selectedDoc.analysis && (
+                <div className="space-y-4 animate-slide-up">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-wb-text-muted)]">
+                      AI Analysis Results
+                    </h3>
+                  </div>
+
+                  {/* Summary Card */}
+                  <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-5 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-[var(--color-wb-text)] mb-2">
+                      <FileCode size={14} className="text-[var(--color-wb-accent)]" />
+                      Executive Summary
+                    </div>
+                    <p className="text-xs leading-relaxed text-[var(--color-wb-text-secondary)] whitespace-pre-wrap">
+                      {selectedDoc.analysis.summary}
+                    </p>
+                  </div>
+
+                  {/* Key Findings Card */}
+                  {selectedDoc.analysis.key_findings && selectedDoc.analysis.key_findings.length > 0 && (
+                    <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-5 shadow-sm">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-[var(--color-wb-text)] mb-3">
+                        <Sparkles size={14} className="text-[var(--color-wb-accent)]" />
+                        Key Findings
+                      </div>
+                      <ul className="space-y-2">
+                        {selectedDoc.analysis.key_findings.map((f, i) => (
+                          <li key={i} className="flex items-start gap-2.5 text-xs text-[var(--color-wb-text-secondary)] leading-relaxed">
+                            <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-[var(--color-wb-accent)] shrink-0" />
+                            <span>{f}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Risks Card */}
+                  {selectedDoc.analysis.risks && selectedDoc.analysis.risks.length > 0 && (
+                    <div className="rounded-xl border border-[var(--color-wb-warning-border)] bg-[var(--color-wb-warning-bg)] p-5">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-[var(--color-wb-warning)] mb-3">
+                        <ShieldAlert size={14} />
+                        Identified Risks & Concerns
+                      </div>
+                      <ul className="space-y-2">
+                        {selectedDoc.analysis.risks.map((r, i) => (
+                          <li key={i} className="flex items-start gap-2.5 text-xs text-[var(--color-wb-warning)] leading-relaxed">
+                            <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-[var(--color-wb-warning)] shrink-0" />
+                            <span>{r}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Action Items Card */}
+                  {selectedDoc.analysis.action_items && selectedDoc.analysis.action_items.length > 0 && (
+                    <div className="rounded-xl border border-[var(--color-wb-success-border)] bg-[var(--color-wb-success-bg)] p-5">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-[var(--color-wb-success)] mb-3">
+                        <ListChecks size={14} />
+                        Recommended Action Items
+                      </div>
+                      <ul className="space-y-2">
+                        {selectedDoc.analysis.action_items.map((a, i) => (
+                          <li key={i} className="flex items-start gap-2.5 text-xs text-[var(--color-wb-success)] leading-relaxed">
+                            <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-[var(--color-wb-success)] shrink-0" />
+                            <span>{a}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
-            </SovereignPanel>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
-      {/* Drag & Drop Zone */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-        onDragLeave={() => setIsDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setIsDragOver(false);
-          if (e.dataTransfer.files?.[0]) handleFileUpload(e.dataTransfer.files[0]);
-        }}
-        onClick={() => fileInputRef.current?.click()}
-        className={`group relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 text-center transition-all duration-200 cursor-pointer surface-level-1 backdrop-blur-xl ${
-          isDragOver
-            ? "border-[#1e6b7b] bg-[#1e6b7b]/10 shadow-md"
-            : "border-[#64818E]/30 hover:border-[#1e6b7b] bg-white/80 hover:bg-white/95"
-        }`}
-      >
-        <div className={`flex h-12 w-12 items-center justify-center rounded-xl border transition-all ${
-          isDragOver
-            ? "border-[#1e6b7b] bg-[#1e6b7b]/20 text-[#1e6b7b]"
-            : "border-[#64818E]/30 bg-[#64818E]/10 text-[#2d404a] group-hover:border-[#1e6b7b] group-hover:text-[#1e6b7b] group-hover:bg-[#1e6b7b]/10"
-        }`}>
-          <Upload className="h-6 w-6" />
-        </div>
-        <h3 className="mt-3 font-mono text-xs font-bold uppercase tracking-wider text-[#192730] group-hover:text-[#1e6b7b] transition-colors">
-          Drop technical documents or browse
-        </h3>
-        <p className="mt-1 text-[11px] text-[#2d404a] max-w-sm font-sans font-medium leading-relaxed">
-          Supports PDF, DOCX, TXT manuals with local OCR text and table parsing.
-        </p>
-      </motion.div>
-
-      {/* Document Repository Table */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15 }}
-        className="rounded-2xl border border-[#64818E]/25 bg-white/90 surface-level-2 shadow-sm backdrop-blur-xl overflow-hidden font-mono"
-      >
-        {/* Table Search */}
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#64818E]/15 px-5 py-3.5 bg-white/80">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#047857]/30 bg-[#047857]/10 text-[#047857]">
-              <HardDrive className="h-4 w-4" />
+              {/* Text Preview Card */}
+              {selectedDoc.text_preview && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-wb-text-muted)]">
+                      Extracted Text Content
+                    </h3>
+                    <button
+                      onClick={() => handleCopyPreview(selectedDoc.text_preview || "")}
+                      className="inline-flex items-center gap-1 text-[11px] text-[var(--color-wb-text-muted)] hover:text-[var(--color-wb-text)] transition-colors cursor-pointer"
+                    >
+                      {copiedPreview ? (
+                        <>
+                          <Check size={12} className="text-[var(--color-wb-success)]" />
+                          <span className="text-[var(--color-wb-success)]">Copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={12} />
+                          <span>Copy text</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-4">
+                    <pre className="font-mono text-xs leading-relaxed text-[var(--color-wb-text-secondary)] whitespace-pre-wrap max-h-80 overflow-y-auto">
+                      {selectedDoc.text_preview}
+                    </pre>
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-xs font-extrabold uppercase tracking-wider text-[#192730]">
-                Ingested Document Repository
-              </h2>
-              <span className="text-[10px] text-[#192730] bg-[#64818E]/15 border border-[#64818E]/25 px-2 py-0.5 rounded-lg font-bold">
-                {documents.length} Files
-              </span>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center p-8 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--color-wb-bg-inset)] border border-[var(--color-wb-border-subtle)] mb-3">
+                <FileText size={22} className="text-[var(--color-wb-text-muted)]" />
+              </div>
+              <h3 className="text-sm font-semibold text-[var(--color-wb-text)]">
+                No document selected
+              </h3>
+              <p className="mt-1 text-xs text-[var(--color-wb-text-muted)] max-w-sm">
+                Select a document from the left list to view extracted text, run AI analysis, or ingest it into RAG.
+              </p>
             </div>
-          </div>
-
-          <div className="relative w-full sm:w-60">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#1e6b7b]" />
-            <input
-              type="text"
-              placeholder="Search filename or ID..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-xl border border-[#64818E]/30 bg-white/95 py-2 pl-8 pr-3 text-xs text-[#192730] placeholder:text-[#4a6272] focus:outline-none focus:border-[#1e6b7b] font-mono font-medium"
-            />
-          </div>
+          )}
         </div>
-
-        {/* Table Content */}
-        {loading && documents.length === 0 ? (
-          <div className="p-10 text-center font-mono text-xs text-[#2d404a] font-medium">
-            <Loader2 className="h-5 w-5 animate-spin mx-auto text-[#1e6b7b] mb-2" />
-            Loading on-premise documents...
-          </div>
-        ) : filteredDocs.length === 0 ? (
-          <div className="p-10 text-center font-mono text-xs text-[#2d404a] font-medium">
-            {searchQuery
-              ? `No documents matching "${searchQuery}"`
-              : "No documents ingested yet. Upload an industrial manual above to initialize vector knowledge."}
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-[#64818E]/20 bg-white/60 text-[10px] uppercase tracking-wider text-[#192730] font-bold">
-                  <th className="px-5 py-3">Document</th>
-                  <th className="px-5 py-3">Format</th>
-                  <th className="px-5 py-3">Size</th>
-                  <th className="px-5 py-3">Status</th>
-                  <th className="px-5 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#64818E]/10">
-                {filteredDocs.map((doc, idx) => (
-                  <motion.tr
-                    key={doc.document_id}
-                    custom={idx}
-                    initial="hidden"
-                    animate="visible"
-                    variants={rowVariants}
-                    onClick={() => handleInspectDoc(doc)}
-                    className="group hover:bg-[#64818E]/10 transition-colors cursor-pointer"
-                  >
-                    <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-[#64818E]/25 bg-[#64818E]/10 text-[#1e6b7b] group-hover:border-[#1e6b7b]/40 group-hover:bg-[#1e6b7b]/10 transition-all">
-                          <FileCode className="h-4 w-4" />
-                        </div>
-                        <div className="flex flex-col min-w-0">
-                          <span className="font-bold text-[#192730] group-hover:text-[#1e6b7b] transition-colors truncate max-w-[240px]">
-                            {doc.filename || "Untitled Document"}
-                          </span>
-                          <span className="text-[10px] text-[#2d404a] truncate max-w-[200px] font-mono">
-                            ID: {doc.document_id}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5 uppercase text-[#1e6b7b] text-[11px] font-bold">
-                      {doc.file_type || "PDF"}
-                    </td>
-                    <td className="px-5 py-3.5 text-[#2d404a] text-[11px] font-medium font-mono">
-                      {doc.file_size ? formatBytes(doc.file_size) : "24.5 KB"}
-                    </td>
-                    <td className="px-5 py-3.5">
-                      <SovereignStatus status={doc.extraction_status || "ready"} size="xs" />
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleInspectDoc(doc);
-                          }}
-                          className="p-1.5 rounded-lg text-[#2d404a] hover:text-[#1e6b7b] hover:bg-[#1e6b7b]/10 transition-colors cursor-pointer"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(doc.document_id, doc.filename || doc.document_id);
-                          }}
-                          className="p-1.5 rounded-lg text-[#2d404a] hover:text-[#be123c] hover:bg-[#be123c]/10 transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </motion.tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </motion.div>
-
-      {/* Document Inspector Drawer */}
-      <SovereignInspector
-        isOpen={isInspectorOpen}
-        onClose={() => setIsInspectorOpen(false)}
-        title={selectedDoc?.filename || "Document Telemetry"}
-        subtitle="Ingested on-premise industrial document chunks and OCR tokens"
-        badge={
-          selectedDoc?.extraction_status && (
-            <SovereignStatus status={selectedDoc.extraction_status} size="xs" />
-          )
-        }
-        data={{
-          document_id: selectedDoc?.document_id || "",
-          filename: selectedDoc?.filename || "",
-          file_type: selectedDoc?.file_type?.toUpperCase() || "PDF",
-          file_size: selectedDoc?.file_size ? formatBytes(selectedDoc.file_size) : "N/A",
-          page_count: selectedDoc?.page_count ?? 1,
-          created_at: selectedDoc?.created_at ? formatRelativeTime(selectedDoc.created_at) : "Recent",
-        }}
-        rawJson={selectedDoc ? JSON.stringify(selectedDoc, null, 2) : undefined}
-      />
-    </div>
+      </div>
+    </AppShell>
   );
 }

@@ -1,237 +1,388 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
-import {
-  Cpu,
-  Zap,
-  HardDrive,
-  CheckCircle2,
-  AlertCircle,
-  Play,
-  Sliders,
-  ShieldCheck,
-  RefreshCw,
-  Terminal,
-  Activity,
-  Layers,
-  Sparkles,
-  ArrowRight,
-  Code2,
-  Eye,
-  Loader2,
-} from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  SovereignPanel,
-  SovereignModelCard,
-  SovereignStatus,
-  SovereignInspector,
-} from "@/components/sovereign";
+import React, { useState, useEffect, useCallback } from "react";
+import AppShell from "@/components/shell/AppShell";
 import {
   listModels,
-  getHealth,
+  getModelsHealth,
   testModelInference,
-  type ModelInfo,
-  type HealthResponse,
-} from "@/lib/api";
+} from "@/lib/api/client";
+import type { ModelInfo, ModelHealthInfo } from "@/lib/api/types";
+import { cn, formatDuration, copyToClipboard } from "@/lib/utils";
+import {
+  Box,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  RefreshCw,
+  Loader2,
+  Send,
+  Cpu,
+  Globe,
+  HardDrive,
+  Zap,
+  Sparkles,
+  Copy,
+  Check,
+  Code,
+  Eye,
+  FileText,
+} from "lucide-react";
 
-const sectionReveal = {
-  hidden: { opacity: 0, y: 16 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] as const } },
-} as const;
+interface ModelRow extends ModelInfo {
+  health?: ModelHealthInfo;
+}
+
+const PRESETS = [
+  "Explain what a sovereign AI workbench is in one sentence.",
+  "What are the best practices for air-gapped LLM deployment?",
+  "Write a Python function to parse JSON safely.",
+];
 
 export default function ModelsPage() {
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [models, setModels] = useState<ModelRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null);
-  const [testPrompt, setTestPrompt] = useState("Explain the concept of local air-gapped sovereign AI.");
-  const [testOutput, setTestOutput] = useState<string | null>(null);
-  const [isInferring, setIsInferring] = useState(false);
-  const [selectedInspectModel, setSelectedInspectModel] = useState<ModelInfo | null>(null);
-  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const fetchModelData = useCallback(async () => {
+  // Inference test
+  const [testModel, setTestModel] = useState<string | null>(null);
+  const [testPrompt, setTestPrompt] = useState(PRESETS[0]);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testMeta, setTestMeta] = useState<{
+    model: string;
+    provider: string;
+    duration: number;
+    tokens: number | null;
+    fallback: boolean;
+  } | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const fetchModels = useCallback(async () => {
     try {
       setLoading(true);
-      const [m, h] = await Promise.all([listModels(), getHealth()]);
-      setModels(m);
-      setHealth(h);
-      if (m.length > 0 && !selectedModel) {
-        setSelectedModel(m[0]);
-      }
+      setError(null);
+      const [modelList, healthList] = await Promise.all([
+        listModels(),
+        getModelsHealth(),
+      ]);
+      const merged: ModelRow[] = modelList.map((m) => ({
+        ...m,
+        health: healthList.find((h) => h.name === m.name),
+      }));
+      setModels(merged);
     } catch (err) {
-      console.error("Failed to load model registry", err);
+      setError(err instanceof Error ? err.message : "Failed to load models");
     } finally {
       setLoading(false);
     }
-  }, [selectedModel]);
+  }, []);
 
   useEffect(() => {
-    fetchModelData();
-  }, [fetchModelData]);
+    fetchModels();
+  }, [fetchModels]);
 
-  const handleTestInference = async () => {
-    if (!testPrompt.trim() || isInferring) return;
-    setIsInferring(true);
-    setTestOutput(null);
+  const handleTest = useCallback(
+    async (modelName: string) => {
+      setTestModel(modelName);
+      setTestResult(null);
+      setTestMeta(null);
+      setTestLoading(true);
+      try {
+        const res = await testModelInference({
+          prompt: testPrompt,
+          model_name: modelName,
+        });
+        setTestResult(res.text);
+        setTestMeta({
+          model: res.model_name,
+          provider: res.provider,
+          duration: res.duration_ms,
+          tokens: res.tokens_used,
+          fallback: res.fallback_used,
+        });
+      } catch (err) {
+        setTestResult(
+          `Error: ${err instanceof Error ? err.message : "Inference failed"}`,
+        );
+      } finally {
+        setTestLoading(false);
+      }
+    },
+    [testPrompt],
+  );
 
-    try {
-      const res = await testModelInference({
-        prompt: testPrompt.trim(),
-        model_name: selectedModel?.name || "general",
-      });
-
-      const fallbackNotice = res.fallback_used
-        ? `\n[Notice: External llama-server is offline. Prompt was synthesized by Sovereign Deterministic Reasoning Engine.]\n`
-        : "";
-
-      setTestOutput(
-        `[Model: ${res.model_name}] [Provider: ${res.provider}] [Latency: ${res.duration_ms}ms] [Tokens: ${res.tokens_used ?? "N/A"}]${fallbackNotice}\n${res.text}`
-      );
-    } catch (err) {
-      setTestOutput(
-        `Inference execution failed: ${err instanceof Error ? err.message : String(err)}`
-      );
-    } finally {
-      setIsInferring(false);
+  const handleCopy = async () => {
+    if (!testResult) return;
+    const ok = await copyToClipboard(testResult);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
-  const handleInspectModel = (m: ModelInfo) => {
-    setSelectedInspectModel(m);
-    setIsInspectorOpen(true);
+  const statusBadge = (status: string) => {
+    const isAvail = status === "available" || status === "healthy" || status === "ok";
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize",
+          isAvail
+            ? "bg-[var(--color-wb-success-bg)] text-[var(--color-wb-success)]"
+            : "bg-[var(--color-wb-warning-bg)] text-[var(--color-wb-warning)]",
+        )}
+      >
+        <span
+          className={cn(
+            "h-1.5 w-1.5 rounded-full",
+            isAvail ? "bg-[var(--color-wb-success)]" : "bg-[var(--color-wb-warning)]",
+          )}
+        />
+        {status}
+      </span>
+    );
   };
 
   return (
-    <div className="space-y-6">
-      {/* Top Banner */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#64818E]/18 bg-white/80 p-5 shadow-2xl surface-level-2 backdrop-blur-2xl"
-      >
-        <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#be123c] to-[#9f1239] text-[#192730] shadow-[0_0_25px_rgba(190,18,60,0.3)] border border-[#64818E]/25">
-            <Cpu className="h-6 w-6" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="font-mono text-xs font-extrabold uppercase tracking-wider text-[#192730]">
-                Open-Weight Model Registry
+    <AppShell>
+      <div className="flex-1 overflow-y-auto px-8 py-8 bg-[var(--color-wb-bg)]">
+        <div className="mx-auto max-w-4xl space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-base font-semibold text-[var(--color-wb-text)]">
+                Local Models & Inference Engine
               </h1>
-              <span className="rounded-lg bg-[#be123c]/10 border border-[#be123c]/40 px-2 py-0.5 font-mono text-[9px] font-bold text-[#be123c] uppercase">
-                llama.cpp Runtime
-              </span>
+              <p className="mt-0.5 text-xs text-[var(--color-wb-text-muted)]">
+                Manage registered models running on local hardware (llama.cpp / GPU).
+              </p>
             </div>
-            <p className="text-[11px] text-[#2d404a] mt-0.5 font-mono font-medium">
-              Local LLM instances, context windows, hardware acceleration, and quantization status
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3 font-mono text-[10px] text-[#2d404a]">
-          <button
-            onClick={fetchModelData}
-            className="flex items-center gap-2 rounded-xl border border-[#64818E]/30 bg-white/80 px-3.5 py-2 text-xs text-[#2d404a] hover:border-[#64818E]/50 hover:bg-[#64818E]/15 transition-all cursor-pointer font-mono font-bold shadow-sm"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin text-[#1e6b7b]" : "text-[#1e6b7b]"}`} />
-            <span>Refresh Registry</span>
-          </button>
-        </div>
-      </motion.div>
-
-      {/* Model Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {models.map((m) => {
-          const isSelected = selectedModel?.name === m.name;
-
-          return (
-            <SovereignModelCard
-              key={m.name}
-              name={m.name}
-              runtime={m.provider_name || "llama.cpp"}
-              contextTokens={m.capabilities?.max_context_tokens || 8192}
-              quantization="Q4_K_M (4-bit)"
-              acceleration="CPU / SIMD"
-              status={m.available !== false ? "operational" : "standby"}
-              tags={["TEXT GEN", "RAG REASONING", "TOOL CALLING"]}
-              selected={isSelected}
-              onSelect={() => setSelectedModel(m)}
-              onInspect={() => handleInspectModel(m)}
-            />
-          );
-        })}
-      </div>
-
-      {/* Local Inference Test Console */}
-      <SovereignPanel
-        title="Local Model Inference Playground"
-        subtitle={`Selected: ${selectedModel?.name || "gemma-3-4b"}`}
-        badge={<SovereignStatus status="operational" label="AIR-GAPPED" size="xs" />}
-        elevation={2}
-      >
-        <div className="space-y-3 font-mono">
-          <textarea
-            rows={2}
-            value={testPrompt}
-            onChange={(e) => setTestPrompt(e.target.value)}
-            placeholder="Enter test prompt for on-premise inference..."
-            className="w-full rounded-xl border border-[#64818E]/30 bg-white/95 p-3.5 text-xs text-[#192730] placeholder:text-[#4a6272] focus:border-[#1e6b7b] focus:outline-none focus:ring-1 focus:ring-[#1e6b7b] transition-all font-sans"
-          />
-
-          <div className="flex justify-end">
             <button
-              onClick={handleTestInference}
-              disabled={isInferring || !testPrompt.trim()}
-              className="flex items-center gap-2 rounded-xl border border-[#1e6b7b]/40 bg-[#1e6b7b]/10 px-5 py-2 text-xs font-mono font-bold text-[#1e6b7b] hover:bg-[#1e6b7b]/20 hover:border-[#1e6b7b]/60 transition-all cursor-pointer disabled:opacity-40"
+              onClick={fetchModels}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] px-3 py-1.5 text-xs font-medium text-[var(--color-wb-text-secondary)] hover:bg-[var(--color-wb-surface-hover)] transition-colors cursor-pointer shadow-sm disabled:opacity-50"
             >
-              <Play className="h-3.5 w-3.5" />
-              <span>{isInferring ? "Generating..." : "Execute Inference"}</span>
+              <RefreshCw size={12} className={cn(loading && "animate-spin-smooth")} />
+              <span>Refresh Models</span>
             </button>
           </div>
 
-          <AnimatePresence>
-            {testOutput && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ type: "spring", stiffness: 300, damping: 25 }}
-                className="rounded-2xl border border-[#64818E]/30 bg-white/95 p-4 text-xs text-[#192730] whitespace-pre-wrap font-mono shadow-sm"
-              >
-                {testOutput}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </SovereignPanel>
+          {error && (
+            <div className="flex items-center gap-2 rounded-xl bg-[var(--color-wb-error-bg)] border border-[var(--color-wb-error-border)] p-3.5 text-xs text-[var(--color-wb-error)]">
+              <XCircle size={15} className="shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
 
-      {/* Model Diagnostic Inspector Drawer */}
-      <SovereignInspector
-        isOpen={isInspectorOpen}
-        onClose={() => setIsInspectorOpen(false)}
-        title={selectedInspectModel?.name || "Model Telemetry"}
-        subtitle="Open-weight model running locally on-premise without cloud API dependencies"
-        badge={
-          selectedInspectModel?.available !== false ? (
-            <SovereignStatus status="operational" size="xs" />
-          ) : (
-            <SovereignStatus status="standby" size="xs" />
-          )
-        }
-        data={{
-          model_name: selectedInspectModel?.name || "",
-          provider_name: selectedInspectModel?.provider_name || "llama.cpp",
-          provider_type: selectedInspectModel?.provider_type || "local",
-          max_context_tokens: selectedInspectModel?.capabilities?.max_context_tokens || 8192,
-          supports_code: selectedInspectModel?.capabilities?.supports_code ? "Yes" : "No",
-          supports_vision: selectedInspectModel?.capabilities?.supports_vision ? "Yes" : "No",
-          isolation: "Strict Loopback",
-        }}
-        rawJson={selectedInspectModel ? JSON.stringify(selectedInspectModel, null, 2) : undefined}
-      />
-    </div>
+          {/* Test prompt composer */}
+          <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-4 shadow-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-semibold text-[var(--color-wb-text)]">
+                Live Test Prompt
+              </h2>
+              <span className="text-[10px] text-[var(--color-wb-text-muted)]">
+                Used when clicking &quot;Test Model&quot; below
+              </span>
+            </div>
+
+            <div className="relative">
+              <input
+                type="text"
+                value={testPrompt}
+                onChange={(e) => setTestPrompt(e.target.value)}
+                placeholder="Enter prompt for model evaluation..."
+                className="w-full rounded-lg border border-[var(--color-wb-border)] bg-[var(--color-wb-bg)] px-3 py-2 text-xs text-[var(--color-wb-text)] placeholder:text-[var(--color-wb-text-muted)] outline-none focus:border-[var(--color-wb-accent)] transition-colors"
+              />
+            </div>
+
+            {/* Presets */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] text-[var(--color-wb-text-muted)] mr-1">Presets:</span>
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setTestPrompt(preset)}
+                  className="rounded-md border border-[var(--color-wb-border-subtle)] bg-[var(--color-wb-bg-inset)] px-2 py-0.5 text-[10px] text-[var(--color-wb-text-secondary)] hover:bg-[var(--color-wb-surface-hover)] hover:text-[var(--color-wb-text)] transition-colors cursor-pointer truncate max-w-[240px]"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Models list */}
+          <div className="space-y-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-wb-text-muted)]">
+              Registered Model Providers ({models.length})
+            </h2>
+
+            {loading && models.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-xs text-[var(--color-wb-text-muted)] gap-2">
+                <Loader2 size={18} className="animate-spin-smooth text-[var(--color-wb-accent)]" />
+                <span>Loading model profiles...</span>
+              </div>
+            ) : models.length === 0 ? (
+              <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[var(--color-wb-border)] p-12 text-center">
+                <Box size={22} className="mb-2 text-[var(--color-wb-text-muted)] opacity-40" />
+                <span className="text-xs font-semibold text-[var(--color-wb-text)]">
+                  No models registered
+                </span>
+                <p className="mt-1 text-[11px] text-[var(--color-wb-text-muted)]">
+                  Check backend configuration in app/config.py
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {models.map((model) => {
+                  const isTestingThis = testLoading && testModel === model.name;
+                  const isCurrentResult = testModel === model.name && testResult;
+
+                  return (
+                    <div
+                      key={model.name}
+                      className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-5 shadow-sm space-y-4 hover:border-[var(--color-wb-border-strong)] transition-all"
+                    >
+                      {/* Top row */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--color-wb-accent-subtle)] border border-[var(--color-wb-accent-muted)] shrink-0">
+                            {model.local ? (
+                              <Zap size={16} className="text-[var(--color-wb-accent)]" />
+                            ) : (
+                              <Globe size={16} className="text-[var(--color-wb-accent)]" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-sm font-semibold text-[var(--color-wb-text)]">
+                                {model.name === "general" ? "Gemma 3 4B (General)" : model.name}
+                              </h3>
+                              {model.health && statusBadge(model.health.status)}
+                            </div>
+                            <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-wb-text-muted)]">
+                              <span>Provider: <strong className="text-[var(--color-wb-text-secondary)] font-medium">{model.provider_name}</strong></span>
+                              <span>·</span>
+                              <span className="capitalize">{model.provider_type}</span>
+                              {model.local && (
+                                <>
+                                  <span>·</span>
+                                  <span className="text-[var(--color-wb-accent)] font-medium">Local Hardware</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => handleTest(model.name)}
+                          disabled={isTestingThis}
+                          className={cn(
+                            "inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-medium transition-colors cursor-pointer shadow-sm",
+                            "bg-[var(--color-wb-accent)] text-white hover:bg-[var(--color-wb-accent-hover)]",
+                            "disabled:opacity-50 disabled:cursor-not-allowed",
+                          )}
+                        >
+                          {isTestingThis ? (
+                            <>
+                              <Loader2 size={13} className="animate-spin-smooth" />
+                              <span>Evaluating...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Send size={12} />
+                              <span>Test Model</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Capabilities pills */}
+                      {model.capabilities && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          {model.capabilities.supports_text && (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-wb-bg-inset)] border border-[var(--color-wb-border-subtle)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-wb-text-secondary)]">
+                              <FileText size={10} className="text-[var(--color-wb-accent)]" />
+                              Text Generation
+                            </span>
+                          )}
+                          {model.capabilities.supports_code && (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-wb-bg-inset)] border border-[var(--color-wb-border-subtle)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-wb-text-secondary)]">
+                              <Code size={10} className="text-[var(--color-wb-accent)]" />
+                              Code Synthesis
+                            </span>
+                          )}
+                          {model.capabilities.supports_vision && (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-wb-bg-inset)] border border-[var(--color-wb-border-subtle)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-wb-text-secondary)]">
+                              <Eye size={10} className="text-[var(--color-wb-accent)]" />
+                              Vision
+                            </span>
+                          )}
+                          <span className="rounded-md bg-[var(--color-wb-bg-inset)] border border-[var(--color-wb-border-subtle)] px-2 py-0.5 font-mono text-[10px] text-[var(--color-wb-text-muted)]">
+                            {model.capabilities.max_context_tokens.toLocaleString()} tokens ctx
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Path info */}
+                      {model.health?.model_path && (
+                        <div className="flex items-center gap-2 text-[11px] text-[var(--color-wb-text-muted)] border-t border-[var(--color-wb-border-subtle)] pt-2.5 font-mono">
+                          <HardDrive size={12} className="text-[var(--color-wb-text-faint)]" />
+                          <span className="truncate">{model.health.model_path}</span>
+                        </div>
+                      )}
+
+                      {/* Test result output */}
+                      {isCurrentResult && (
+                        <div className="rounded-lg border border-[var(--color-wb-border)] bg-[var(--color-wb-bg)] p-3.5 space-y-2.5 animate-slide-up">
+                          <div className="flex items-center justify-between text-[11px] text-[var(--color-wb-text-muted)]">
+                            <span className="font-semibold text-[var(--color-wb-text)]">
+                              Inference Response
+                            </span>
+                            <button
+                              onClick={handleCopy}
+                              className="inline-flex items-center gap-1 text-[10px] hover:text-[var(--color-wb-text)] transition-colors cursor-pointer"
+                            >
+                              {copied ? (
+                                <Check size={11} className="text-[var(--color-wb-success)]" />
+                              ) : (
+                                <Copy size={11} />
+                              )}
+                              <span>{copied ? "Copied" : "Copy"}</span>
+                            </button>
+                          </div>
+
+                          <p className="text-xs leading-relaxed text-[var(--color-wb-text-secondary)] whitespace-pre-wrap">
+                            {testResult}
+                          </p>
+
+                          {testMeta && (
+                            <div className="flex flex-wrap items-center gap-3 text-[10px] font-mono text-[var(--color-wb-text-muted)] border-t border-[var(--color-wb-border-subtle)] pt-2">
+                              <span>Latency: <strong className="text-[var(--color-wb-text)]">{formatDuration(testMeta.duration)}</strong></span>
+                              {testMeta.tokens !== null && (
+                                <>
+                                  <span>·</span>
+                                  <span>Tokens: <strong className="text-[var(--color-wb-text)]">{testMeta.tokens}</strong></span>
+                                </>
+                              )}
+                              {testMeta.fallback && (
+                                <>
+                                  <span>·</span>
+                                  <span className="text-[var(--color-wb-warning)]">Fallback Provider</span>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </AppShell>
   );
 }
