@@ -1,304 +1,531 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import AppShell from "@/components/shell/AppShell";
 import {
-  Database,
-  Search,
-  Sparkles,
-  Layers,
-  FileText,
-  Zap,
-  ArrowRight,
-  ShieldCheck,
-  CheckCircle2,
-  Clock,
-  Sliders,
-  Copy,
-  Check,
-  RefreshCw,
-  Loader2,
-  ExternalLink,
-} from "lucide-react";
-import { motion } from "framer-motion";
-import {
-  SovereignPanel,
-  SovereignEvidence,
-  SovereignPipeline,
-  SovereignStatus,
-  SovereignMetric,
-  SovereignInspector,
-} from "@/components/sovereign";
-import {
-  queryKnowledge,
   listKnowledgeDocuments,
-  getHealth,
-  type QueryResponse,
-  type KnowledgeDocument,
-  type HealthResponse,
-  type Citation,
-} from "@/lib/api";
+  searchKnowledge,
+  queryKnowledge,
+  deleteKnowledgeDocument,
+} from "@/lib/api/client";
+import type {
+  KnowledgeDocument,
+  SearchResultItem,
+  QueryResponse,
+  EvidenceQuality,
+} from "@/lib/api/types";
+import { cn, formatBytes, formatDuration, formatRelativeTime } from "@/lib/utils";
+import { EvidenceBadge, SourceCitation } from "@/components/workspace";
+import {
+  Search,
+  BookOpen,
+  Trash2,
+  Loader2,
+  AlertCircle,
+  RefreshCw,
+  Database,
+  MessageSquare,
+  FileText,
+  Sparkles,
+  ArrowRight,
+  Clock,
+  Layers,
+  CheckCircle2,
+} from "lucide-react";
 
-const sectionReveal = {
-  hidden: { opacity: 0, y: 16 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] as const } },
-} as const;
+type Tab = "query" | "search" | "documents";
 
 export default function KnowledgePage() {
-  const [query, setQuery] = useState("");
-  const [topK, setTopK] = useState(4);
-  const [isQuerying, setIsQuerying] = useState(false);
-  const [queryResult, setQueryResult] = useState<QueryResponse | null>(null);
-  const [queryLatency, setQueryLatency] = useState<number | null>(null);
+  const [tab, setTab] = useState<Tab>("query");
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
-  const [isInspectorOpen, setIsInspectorOpen] = useState(false);
+  const [loadingDocs, setLoadingDocs] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const fetchKnowledgeData = useCallback(async () => {
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchEvidence, setSearchEvidence] = useState<EvidenceQuality | null>(null);
+  const [searchTime, setSearchTime] = useState<number | null>(null);
+  const [searched, setSearched] = useState(false);
+
+  // Query state
+  const [queryText, setQueryText] = useState("");
+  const [queryResult, setQueryResult] = useState<QueryResponse | null>(null);
+  const [queryLoading, setQueryLoading] = useState(false);
+
+  const fetchDocuments = useCallback(async () => {
     try {
-      const [docs, h] = await Promise.all([
-        listKnowledgeDocuments(),
-        getHealth(),
-      ]);
+      setLoadingDocs(true);
+      setError(null);
+      const docs = await listKnowledgeDocuments();
       setDocuments(docs);
-      setHealth(h);
     } catch (err) {
-      console.error("Failed to load knowledge telemetry", err);
+      setError(err instanceof Error ? err.message : "Failed to load knowledge documents");
+    } finally {
+      setLoadingDocs(false);
     }
   }, []);
 
   useEffect(() => {
-    fetchKnowledgeData();
-  }, [fetchKnowledgeData]);
+    fetchDocuments();
+  }, [fetchDocuments]);
 
-  const handleRunQuery = async (customQ?: string) => {
-    const q = (customQ || query).trim();
-    if (!q || isQuerying) return;
-
-    setIsQuerying(true);
-    const start = performance.now();
-
+  const handleSearch = useCallback(async () => {
+    if (!searchQuery.trim()) return;
+    setSearchLoading(true);
+    setSearchResults([]);
+    setSearchEvidence(null);
+    setSearchTime(null);
+    setSearched(true);
+    setError(null);
     try {
-      const res = await queryKnowledge({ query: q, top_k: topK });
-      const elapsed = Math.round(performance.now() - start);
-      setQueryResult(res);
-      setQueryLatency(elapsed);
+      const res = await searchKnowledge({ query: searchQuery, top_k: 10 });
+      setSearchResults(res.results);
+      setSearchEvidence(res.evidence_quality);
+      setSearchTime(res.retrieval_time_ms);
     } catch (err) {
-      alert(`Query failed: ${err instanceof Error ? err.message : String(err)}`);
+      setError(err instanceof Error ? err.message : "Search failed");
     } finally {
-      setIsQuerying(false);
+      setSearchLoading(false);
     }
+  }, [searchQuery]);
+
+  const handleQuery = useCallback(async () => {
+    if (!queryText.trim()) return;
+    setQueryLoading(true);
+    setQueryResult(null);
+    setError(null);
+    try {
+      const res = await queryKnowledge({ query: queryText, top_k: 5 });
+      setQueryResult(res);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Query failed");
+    } finally {
+      setQueryLoading(false);
+    }
+  }, [queryText]);
+
+  const handleDeleteDoc = useCallback(
+    async (docId: string) => {
+      try {
+        await deleteKnowledgeDocument(docId);
+        setDocuments((prev) => prev.filter((d) => d.document_id !== docId));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Delete failed");
+      }
+    },
+    [],
+  );
+
+  const statusBadge = (status: string) => {
+    const isIndexed = status === "indexed";
+    return (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium capitalize",
+          isIndexed
+            ? "bg-[var(--color-wb-success-bg)] text-[var(--color-wb-success)]"
+            : "bg-[var(--color-wb-warning-bg)] text-[var(--color-wb-warning)]",
+        )}
+      >
+        <span
+          className={cn(
+            "h-1.5 w-1.5 rounded-full",
+            isIndexed ? "bg-[var(--color-wb-success)]" : "bg-[var(--color-wb-warning)]",
+          )}
+        />
+        {status}
+      </span>
+    );
   };
 
-  const presets = [
-    "What are the primary emergency safety shutdown protocols?",
-    "Summarize the technical operational parameters of the cooling system.",
-    "List the maintenance schedules and calibration tolerances.",
+  const totalChunks = documents.reduce((acc, d) => acc + (d.chunk_count || 0), 0);
+
+  const TABS: { key: Tab; label: string; icon: React.ElementType; count?: number }[] = [
+    { key: "query", label: "RAG Query", icon: MessageSquare },
+    { key: "search", label: "Semantic Search", icon: Search },
+    { key: "documents", label: "Indexed Documents", icon: Database, count: documents.length },
   ];
 
   return (
-    <div className="space-y-6">
-      {/* Top Banner Header */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#64818E]/18 bg-white/80 p-5 shadow-2xl surface-level-2 backdrop-blur-2xl"
-      >
-        <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#4a6272] to-[#64818E] text-[#192730] shadow-[0_0_25px_rgba(100,129,142,0.3)] border border-[#64818E]/25">
-            <Database className="h-6 w-6" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="font-mono text-xs font-extrabold uppercase tracking-wider text-[#192730]">
-                Knowledge Base & RAG Investigation Console
-              </h1>
-              <span className="rounded-lg bg-[#1e6b7b]/10 border border-[#1e6b7b]/40 px-2 py-0.5 font-mono text-[9px] font-bold text-[#1e6b7b] uppercase">
-                Vector Similarity
-              </span>
-            </div>
-            <p className="text-[11px] text-[#2d404a] mt-0.5 font-mono font-medium">
-              Semantic similarity retrieval, neural embeddings, and evidence-grounded queries
-            </p>
-          </div>
-        </div>
-
-        {/* Telemetry Metrics */}
-        <div className="flex items-center gap-3 font-mono text-[10px]">
-          <div className="rounded-xl border border-[#64818E]/25 bg-white/80 px-3 py-1.5 text-[#192730] flex items-center gap-1.5 shadow-sm">
-            <Layers className="h-3 w-3 text-[#1e6b7b]" />
-            <span className="text-[#2d404a] uppercase font-bold">Chunks: </span>
-            <span className="font-bold text-[#1e6b7b]">{health?.knowledge_chunks || 0}</span>
-          </div>
-          <div className="rounded-xl border border-[#64818E]/25 bg-white/80 px-3 py-1.5 text-[#192730] flex items-center gap-1.5 shadow-sm">
-            <Zap className="h-3 w-3 text-[#047857]" />
-            <span className="text-[#2d404a] uppercase font-bold">Provider: </span>
-            <span className="font-bold text-[#047857]">{health?.embedding_provider || "tfidf"}</span>
-          </div>
-        </div>
-      </motion.div>
-
-      {/* Query Console */}
-      <SovereignPanel
-        title="01 / Investigation Query"
-        subtitle="Submit question for semantic similarity search"
-        action={
-          <div className="flex items-center gap-3 font-mono text-xs text-[#2d404a]">
-            <span className="font-bold">Top-K: {topK}</span>
-            <input
-              type="range"
-              min="1"
-              max="8"
-              value={topK}
-              onChange={(e) => setTopK(Number(e.target.value))}
-              className="h-1.5 w-24 rounded bg-[#C9D0D8] accent-[#1e6b7b] cursor-pointer"
-            />
-          </div>
-        }
-      >
-        <div className="space-y-3">
-          <div className="relative">
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRunQuery();
-              }}
-              placeholder="Ask a question or enter technical keywords to retrieve grounded vector evidence..."
-              className="w-full rounded-xl border border-[#64818E]/30 bg-white/95 py-3.5 pl-11 pr-28 text-xs text-[#192730] placeholder:text-[#4a6272] focus:border-[#1e6b7b] focus:outline-none focus:ring-1 focus:ring-[#1e6b7b] font-sans font-medium transition-all"
-            />
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#1e6b7b]" />
-            <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
-              <button
-                type="button"
-                onClick={() => handleRunQuery()}
-                disabled={isQuerying || !query.trim()}
-                className="flex items-center gap-1.5 rounded-xl border border-[#1e6b7b]/40 bg-[#1e6b7b]/10 px-3.5 py-2 text-xs font-mono font-bold text-[#1e6b7b] hover:bg-[#1e6b7b]/20 hover:border-[#1e6b7b]/60 transition-all cursor-pointer disabled:opacity-40"
-              >
-                <Search className="h-3 w-3" />
-                <span>{isQuerying ? "Searching..." : "Retrieve"}</span>
-              </button>
-            </div>
+    <AppShell>
+      <div className="flex h-full flex-col bg-[var(--color-wb-bg)]">
+        {/* ── Subheader / Tab Bar ───────────────────────────────────── */}
+        <div className="flex items-center justify-between border-b border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] px-8">
+          <div className="flex items-center gap-2">
+            {TABS.map((t) => {
+              const Icon = t.icon;
+              const active = tab === t.key;
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => setTab(t.key)}
+                  className={cn(
+                    "flex items-center gap-2 border-b-2 py-3 px-3 text-xs font-medium transition-colors cursor-pointer",
+                    active
+                      ? "border-[var(--color-wb-accent)] text-[var(--color-wb-accent)]"
+                      : "border-transparent text-[var(--color-wb-text-muted)] hover:text-[var(--color-wb-text)]",
+                  )}
+                >
+                  <Icon size={14} />
+                  <span>{t.label}</span>
+                  {t.count !== undefined && (
+                    <span
+                      className={cn(
+                        "rounded-full px-1.5 py-0.2 text-[10px] font-mono",
+                        active
+                          ? "bg-[var(--color-wb-accent-subtle)] text-[var(--color-wb-accent)]"
+                          : "bg-[var(--color-wb-bg-inset)] text-[var(--color-wb-text-muted)]",
+                      )}
+                    >
+                      {t.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
-          {/* Quick Presets */}
-          <div className="flex flex-wrap items-center gap-2 pt-1 font-mono text-[10px]">
-            <span className="text-[#2d404a] uppercase font-bold">Presets:</span>
-            {presets.map((p, idx) => (
-              <motion.button
-                key={idx}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: idx * 0.05 }}
-                onClick={() => {
-                  setQuery(p);
-                  handleRunQuery(p);
-                }}
-                className="rounded-xl border border-[#64818E]/25 bg-white/80 px-3 py-1.5 text-[#2d404a] font-medium hover:border-[#1e6b7b]/50 hover:text-[#1e6b7b] hover:bg-[#1e6b7b]/10 transition-all truncate max-w-xs cursor-pointer shadow-sm"
-              >
-                {p}
-              </motion.button>
-            ))}
+          <div className="hidden sm:flex items-center gap-3 text-xs text-[var(--color-wb-text-muted)]">
+            <span className="flex items-center gap-1.5">
+              <Database size={13} />
+              <span className="font-mono">{documents.length}</span> documents
+            </span>
+            <span>·</span>
+            <span className="flex items-center gap-1.5">
+              <Layers size={13} />
+              <span className="font-mono">{totalChunks}</span> chunks
+            </span>
           </div>
         </div>
-      </SovereignPanel>
 
-      {/* Retrieval Pipeline Indicator */}
-      {isQuerying && (
-        <motion.div initial="hidden" animate="visible" variants={sectionReveal}>
-          <SovereignPanel
-            title="02 / Vector Retrieval Active"
-            subtitle="Matching query vector in local FAISS space"
-            elevation={3}
-          >
-            <div className="flex items-center gap-3 text-[#1e6b7b] font-mono text-xs">
-              <Loader2 className="h-4 w-4 animate-spin text-[#1e6b7b]" />
-              <span className="font-bold">CALCULATING COSINE SIMILARITY ACROSS LOCAL EMBEDDINGS...</span>
-              <div className="flex-1 h-1.5 bg-[#C9D0D8] rounded-full overflow-hidden">
-                <div className="h-full w-2/3 bg-gradient-to-r from-[#1e6b7b] to-[#047857] rounded-full animate-pulse" />
+        {/* ── Tab Content ────────────────────────────────────────────── */}
+        <div className="flex-1 overflow-y-auto px-8 py-8">
+          <div className="mx-auto max-w-3xl space-y-6">
+            {error && (
+              <div className="flex items-center gap-2 rounded-xl bg-[var(--color-wb-error-bg)] border border-[var(--color-wb-error-border)] p-3.5 text-xs text-[var(--color-wb-error)]">
+                <AlertCircle size={15} className="shrink-0" />
+                <span className="flex-1">{error}</span>
+                <button onClick={() => setError(null)} className="underline font-medium cursor-pointer">
+                  Dismiss
+                </button>
               </div>
-            </div>
-          </SovereignPanel>
-        </motion.div>
-      )}
+            )}
 
-      {/* Evidence & Grounded Answer */}
-      {queryResult && (
-        <motion.div
-          initial="hidden"
-          animate="visible"
-          variants={sectionReveal}
-          className="space-y-6"
-        >
-          {/* Synthesized Grounded Answer */}
-          <SovereignPanel
-            title="03 / Grounded Answer"
-            subtitle="Local open-weight model synthesis"
-            badge={<SovereignStatus status="operational" label="SYNTHESIZED" size="xs" />}
-            action={
-              queryLatency ? (
-                <span className="font-mono text-[11px] text-[#2d404a] font-medium">
-                  Latency: <strong className={queryLatency < 500 ? "text-[#047857]" : "text-[#b45309]"}>{queryLatency}ms</strong>
-                </span>
-              ) : undefined
-            }
-          >
-            <div className="font-sans text-xs leading-relaxed text-[#192730] whitespace-pre-wrap selection:bg-[#1e6b7b]/20">
-              {queryResult.answer}
-            </div>
-          </SovereignPanel>
+            {/* ── 1. RAG Query Tab ────────────────────────────────────── */}
+            {tab === "query" && (
+              <div className="space-y-6 animate-fade-in">
+                <div>
+                  <h1 className="text-base font-semibold text-[var(--color-wb-text)]">
+                    Grounded Knowledge Query (RAG)
+                  </h1>
+                  <p className="mt-1 text-xs text-[var(--color-wb-text-muted)] leading-relaxed">
+                    Ask questions across your entire knowledge base. The system retrieves relevant document chunks and synthesizes a verified answer with citations.
+                  </p>
+                </div>
 
-          {/* Retrieved Evidence Chunks */}
-          {queryResult.citations && queryResult.citations.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between font-mono text-xs text-[#2d404a] uppercase">
-                <span className="flex items-center gap-2 font-extrabold text-[#192730]">
-                  <Layers className="h-4 w-4 text-[#1e6b7b]" />
-                  04 / Grounded Citations ({queryResult.citations.length} Chunks Matched)
-                </span>
-                <span className="flex items-center gap-1 text-[#047857] font-bold">
-                  <ShieldCheck className="h-3.5 w-3.5" /> Air-Gap Verified
-                </span>
+                {/* Input box */}
+                <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-3 shadow-sm focus-within:border-[var(--color-wb-border-strong)] transition-colors">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={queryText}
+                      onChange={(e) => setQueryText(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleQuery()}
+                      placeholder="e.g. What are the key safety requirements mentioned in the manuals?"
+                      className="flex-1 bg-transparent px-2 py-1.5 text-xs text-[var(--color-wb-text)] placeholder:text-[var(--color-wb-text-muted)] outline-none"
+                    />
+                    <button
+                      onClick={handleQuery}
+                      disabled={queryLoading || !queryText.trim()}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-medium text-white transition-colors cursor-pointer shadow-sm",
+                        "bg-[var(--color-wb-accent)] hover:bg-[var(--color-wb-accent-hover)]",
+                        "disabled:opacity-50 disabled:cursor-not-allowed",
+                      )}
+                    >
+                      {queryLoading ? (
+                        <>
+                          <Loader2 size={13} className="animate-spin-smooth" />
+                          <span>Generating answer...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={13} />
+                          <span>Query RAG</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Results View */}
+                {queryResult && (
+                  <div className="space-y-4 animate-slide-up">
+                    {/* Meta bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-wb-border)] pb-3">
+                      <div className="flex items-center gap-2">
+                        <EvidenceBadge quality={queryResult.evidence_quality} />
+                        <span className="text-[11px] text-[var(--color-wb-text-muted)]">
+                          {queryResult.retrieval_count} sources retrieved
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-[11px] text-[var(--color-wb-text-muted)] font-mono">
+                        <span className="flex items-center gap-1">
+                          <Clock size={11} />
+                          {formatDuration(queryResult.total_time_ms)}
+                        </span>
+                        <span>·</span>
+                        <span>Model: {queryResult.model_used}</span>
+                      </div>
+                    </div>
+
+                    {/* Answer Card */}
+                    <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-5 shadow-sm space-y-3">
+                      <div className="text-xs font-semibold text-[var(--color-wb-text)]">
+                        Synthesized Answer
+                      </div>
+                      <p className="text-xs leading-relaxed text-[var(--color-wb-text-secondary)] whitespace-pre-wrap">
+                        {queryResult.answer}
+                      </p>
+                    </div>
+
+                    {/* Citations */}
+                    {queryResult.citations && queryResult.citations.length > 0 && (
+                      <div className="space-y-2 pt-2">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-wb-text-muted)]">
+                          Cited Sources ({queryResult.citations.length})
+                        </h3>
+                        <div className="grid gap-2">
+                          {queryResult.citations.map((c, i) => (
+                            <SourceCitation key={c.chunk_id ?? i} citation={c} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
+            )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {queryResult.citations.map((c, idx) => (
-                  <SovereignEvidence
-                    key={idx}
-                    chunkId={c.document_id}
-                    documentName={c.document}
-                    content={c.section ? `[Section: ${c.section}]\nDocument Reference: ${c.document}` : `Document Source: ${c.document}`}
-                    score={c.relevance_score ?? 0.85}
-                    chunkIndex={idx + 1}
-                    onInspect={() => {
-                      setSelectedCitation(c);
-                      setIsInspectorOpen(true);
-                    }}
-                  />
-                ))}
+            {/* ── 2. Semantic Search Tab ──────────────────────────────── */}
+            {tab === "search" && (
+              <div className="space-y-6 animate-fade-in">
+                <div>
+                  <h1 className="text-base font-semibold text-[var(--color-wb-text)]">
+                    Vector Semantic Search
+                  </h1>
+                  <p className="mt-1 text-xs text-[var(--color-wb-text-muted)] leading-relaxed">
+                    Search document chunks by semantic embedding similarity without running an LLM synthesis step.
+                  </p>
+                </div>
+
+                {/* Search input */}
+                <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-3 shadow-sm focus-within:border-[var(--color-wb-border-strong)] transition-colors">
+                  <div className="flex items-center gap-2">
+                    <Search size={14} className="text-[var(--color-wb-text-muted)] shrink-0 ml-1" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                      placeholder="Enter search concept or phrase..."
+                      className="flex-1 bg-transparent px-2 py-1.5 text-xs text-[var(--color-wb-text)] placeholder:text-[var(--color-wb-text-muted)] outline-none"
+                    />
+                    <button
+                      onClick={handleSearch}
+                      disabled={searchLoading || !searchQuery.trim()}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-medium text-white transition-colors cursor-pointer shadow-sm",
+                        "bg-[var(--color-wb-accent)] hover:bg-[var(--color-wb-accent-hover)]",
+                        "disabled:opacity-50 disabled:cursor-not-allowed",
+                      )}
+                    >
+                      {searchLoading ? (
+                        <>
+                          <Loader2 size={13} className="animate-spin-smooth" />
+                          <span>Searching...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Search</span>
+                          <ArrowRight size={13} />
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Search meta summary */}
+                {searched && !searchLoading && (
+                  <div className="flex items-center justify-between text-xs text-[var(--color-wb-text-muted)] border-b border-[var(--color-wb-border)] pb-2">
+                    <div className="flex items-center gap-2">
+                      <span>Found {searchResults.length} relevant chunks</span>
+                      {searchEvidence && <EvidenceBadge quality={searchEvidence} />}
+                    </div>
+                    {searchTime !== null && (
+                      <span className="font-mono text-[11px]">
+                        Retrieved in {formatDuration(searchTime)}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Results list */}
+                {searchResults.length > 0 ? (
+                  <div className="space-y-3">
+                    {searchResults.map((item, idx) => {
+                      const scorePercent = Math.round(item.score * 100);
+                      return (
+                        <div
+                          key={item.chunk_id || idx}
+                          className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-4 shadow-sm hover:border-[var(--color-wb-border-strong)] transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-2 border-b border-[var(--color-wb-border-subtle)] pb-2 mb-2.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <FileText size={13} className="text-[var(--color-wb-accent)] shrink-0" />
+                              <span className="text-xs font-semibold text-[var(--color-wb-text)] truncate">
+                                {item.filename}
+                              </span>
+                              {item.page_number && (
+                                <span className="text-[10px] text-[var(--color-wb-text-muted)] bg-[var(--color-wb-bg-inset)] px-1.5 py-0.5 rounded">
+                                  Page {item.page_number}
+                                </span>
+                              )}
+                              {item.section && (
+                                <span className="text-[10px] text-[var(--color-wb-text-muted)] truncate max-w-[140px]">
+                                  {item.section}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <div className="w-14 h-1.5 rounded-full bg-[var(--color-wb-bg-inset)] overflow-hidden">
+                                <div
+                                  className="h-full bg-[var(--color-wb-accent)] rounded-full"
+                                  style={{ width: `${scorePercent}%` }}
+                                />
+                              </div>
+                              <span className="font-mono text-[10px] font-semibold text-[var(--color-wb-accent)]">
+                                {scorePercent}%
+                              </span>
+                            </div>
+                          </div>
+
+                          <p className="text-xs leading-relaxed text-[var(--color-wb-text-secondary)] whitespace-pre-wrap">
+                            {item.text}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : searched && !searchLoading ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-center text-xs text-[var(--color-wb-text-muted)]">
+                    <Search size={22} className="mb-2 opacity-30" />
+                    <span>No matching chunks found for this query</span>
+                  </div>
+                ) : null}
               </div>
-            </div>
-          )}
-        </motion.div>
-      )}
+            )}
 
-      {/* Citation Inspector Drawer */}
-      <SovereignInspector
-        isOpen={isInspectorOpen}
-        onClose={() => setIsInspectorOpen(false)}
-        title={selectedCitation?.document || "Evidence Chunk"}
-        subtitle="Grounded chunk metadata & vector score"
-        data={{
-          document: selectedCitation?.document || "",
-          document_id: selectedCitation?.document_id || "",
-          section: selectedCitation?.section || "N/A",
-          relevance_score: selectedCitation?.relevance_score
-            ? `${(selectedCitation.relevance_score * 100).toFixed(1)}%`
-            : "N/A",
-        }}
-      />
-    </div>
+            {/* ── 3. Indexed Documents Tab ────────────────────────────── */}
+            {tab === "documents" && (
+              <div className="space-y-6 animate-fade-in">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h1 className="text-base font-semibold text-[var(--color-wb-text)]">
+                      Indexed Knowledge Store
+                    </h1>
+                    <p className="mt-1 text-xs text-[var(--color-wb-text-muted)]">
+                      Documents embedded and stored in the local vector database available for RAG.
+                    </p>
+                  </div>
+                  <button
+                    onClick={fetchDocuments}
+                    className="flex items-center gap-1.5 rounded-lg border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] px-3 py-1.5 text-xs font-medium text-[var(--color-wb-text-secondary)] hover:bg-[var(--color-wb-surface-hover)] transition-colors cursor-pointer shadow-sm"
+                  >
+                    <RefreshCw size={13} className={cn(loadingDocs && "animate-spin-smooth")} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+
+                {loadingDocs ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-xs text-[var(--color-wb-text-muted)] gap-2">
+                    <Loader2 size={18} className="animate-spin-smooth text-[var(--color-wb-accent)]" />
+                    <span>Loading indexed documents...</span>
+                  </div>
+                ) : documents.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-[var(--color-wb-border)] p-12 text-center">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--color-wb-bg-inset)] mb-3">
+                      <Database size={18} className="text-[var(--color-wb-text-muted)]" />
+                    </div>
+                    <span className="text-xs font-semibold text-[var(--color-wb-text)]">
+                      No documents indexed yet
+                    </span>
+                    <p className="mt-1 text-[11px] text-[var(--color-wb-text-muted)] max-w-sm">
+                      Go to the Documents tab, upload a document, and click &quot;Ingest to Knowledge Base&quot;.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-hidden rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] shadow-sm">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-[var(--color-wb-border)] bg-[var(--color-wb-bg-inset)]">
+                          <th className="px-4 py-3 font-semibold text-[var(--color-wb-text-secondary)]">Document</th>
+                          <th className="px-3 py-3 font-semibold text-[var(--color-wb-text-secondary)]">Type</th>
+                          <th className="px-3 py-3 font-semibold text-[var(--color-wb-text-secondary)]">Chunks</th>
+                          <th className="px-3 py-3 font-semibold text-[var(--color-wb-text-secondary)]">Status</th>
+                          <th className="px-4 py-3 font-semibold text-[var(--color-wb-text-secondary)]">Ingested</th>
+                          <th className="px-3 py-3 font-semibold text-[var(--color-wb-text-secondary)] text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--color-wb-border)]">
+                        {documents.map((doc) => (
+                          <tr key={doc.document_id} className="hover:bg-[var(--color-wb-surface-hover)] transition-colors">
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2.5">
+                                <BookOpen size={14} className="text-[var(--color-wb-accent)] shrink-0" />
+                                <span className="font-medium text-[var(--color-wb-text)] truncate max-w-[220px]" title={doc.filename}>
+                                  {doc.filename}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-3 py-3">
+                              <span className="rounded bg-[var(--color-wb-bg-inset)] px-1.5 py-0.5 font-mono text-[10px] uppercase text-[var(--color-wb-text-muted)]">
+                                {doc.file_type}
+                              </span>
+                            </td>
+                            <td className="px-3 py-3 font-mono text-[11px] text-[var(--color-wb-text-secondary)]">
+                              {doc.chunk_count}
+                            </td>
+                            <td className="px-3 py-3">
+                              {statusBadge(doc.ingestion_status)}
+                            </td>
+                            <td className="px-4 py-3 text-[11px] text-[var(--color-wb-text-muted)]">
+                              {formatRelativeTime(doc.ingested_at)}
+                            </td>
+                            <td className="px-3 py-3 text-right">
+                              <button
+                                onClick={() => handleDeleteDoc(doc.document_id)}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-wb-text-muted)] hover:bg-[var(--color-wb-error-bg)] hover:text-[var(--color-wb-error)] transition-colors cursor-pointer"
+                                title="Remove from vector store"
+                                aria-label="Remove from vector store"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </AppShell>
   );
 }
