@@ -11,19 +11,19 @@ A self-hosted, air-gap-capable AI workbench that enables confidential industrial
 The system is designed to support:
 
 - Multiple open-weight AI models with automatic task-based selection
-- Agentic multi-step task execution with planning and tool use
-- Local file reading/writing and sandboxed code execution
-- RAG over internal documents, SOPs, and manuals
-- OCR for scanned documents
-- Multimodal understanding (images, drawings, photographs)
+- Agentic multi-step task execution with planning, tool invocation, and deterministic verification
+- Local file reading/writing and sandboxed execution
+- Persistent, air-gapped Knowledge Base & RAG over internal documents, SOPs, and equipment manuals
+- Optical Character Recognition (OCR) for scanned documents via local Tesseract
+- Multimodal understanding (drawings, schematics, photos)
 - Generation of deliverables (DOCX, PPTX, XLSX)
-- Full audit logging and execution traces
-- Visible proof of air-gap compliance (no external network calls)
+- Append-only audit logging, latency breakdown, and execution traces
+- Verified air-gap compliance (strictly zero external network calls)
 
-## Current Architecture (v0.5.0 — Knowledge Base & RAG)
+## Current Architecture (v0.6.1 — Production Hardened Knowledge Base & RAG)
 
 ```
-User / Client
+User / Client / Industrial Agent
   │
   ├─► POST /files/upload ──► DocumentStore ──► ProcessorRegistry ──► Document
   │                                                  │
@@ -31,56 +31,68 @@ User / Client
   │                                     ▼            ▼            ▼
   │                                TxtProcessor PdfProcessor DocxProcessor
   │                                                  │
-  │                                                  ▼ (if scanned / empty text)
-  │                                            OcrProcessor (Tesseract)
+  │                                                  ▼ (if scanned / image-only)
+  │                                            OcrProcessor (Local Tesseract 5.x)
   │
-  ├─► POST /knowledge/ingest/{id} ──► ChunkingService ──► TF-IDF Embeddings
-  │                                          │                    │
-  │                                          ▼                    ▼
-  │                                   KnowledgeChunks      InMemoryVectorStore
+  ├─► POST /knowledge/ingest/{id} ──► IngestionService (SHA-256 content deduplication)
+  │                                          │
+  │                                          ├─► ChunkingService (paragraph/section splits + chunk hashes)
+  │                                          ├─► TfidfEmbeddingProvider (versioned, max_features=512)
+  │                                          ├─► KnowledgeMetadataStore (SQLite WAL: knowledge.db)
+  │                                          └─► PersistentVectorStore (.npz matrix + JSON mappings)
   │
-  ├─► POST /knowledge/search ──► KnowledgeRetriever ──► ranked chunks + provenance
+  ├─► POST /knowledge/search ──► KnowledgeRetriever (cosine sim + threshold + provenance)
+  │                                          │
+  │                                          └─► deterministic EvidenceQuality classification
   │
-  ├─► POST /knowledge/query ──► RAGService ──► retrieve → prompt → local LLM → answer + citations
+  ├─► POST /knowledge/query ──► RAGService (evidence bounds + grounded prompt + citations)
+  │                                          │
+  │                                          └─► Local LLM (LlamaCppProvider / DummyLocalModel)
   │
   ├─► POST /documents/{id}/analyze ──► DocumentStore ──► Local LLM (Gemma 3 via llama.cpp)
   │
-  └─► POST /agent/run ──► Agent Orchestrator ──► Model Registry ──► Local Model
-                              │
-                              └─► knowledge_search tool ──► KnowledgeRetriever
+  └─► POST /agent/run ──► Agent Orchestrator ──► Task Router ──► Planner ──► Execution Engine
+                               │
+                               ├─► CalculatorTool & CalculatorVerifier
+                               ├─► FileReaderTool (path traversal protected)
+                               └─► KnowledgeSearchTool ──► KnowledgeRetriever
 ```
 
 ### Key Components
 
 | Module | Role |
 |---|---|
-| `backend/app/main.py` | FastAPI entry point; wires document + knowledge subsystems |
-| `backend/app/config.py` | Settings incl. chunk_size/overlap, embedding_dimension, retrieval_top_k |
-| `backend/app/documents/*` | Document Intelligence (TXT/PDF/DOCX/OCR, DocumentStore) |
-| `backend/app/knowledge/models.py` | `KnowledgeDocument`, `KnowledgeChunk`, `RetrievalResult`, `Citation`, `RAGResponse` |
-| `backend/app/knowledge/chunking.py` | Paragraph/sentence chunking with page/section provenance |
-| `backend/app/knowledge/embeddings.py` | `EmbeddingProvider` ABC (swap-in for neural embeddings later) |
-| `backend/app/knowledge/tfidf_embeddings.py` | Local TF-IDF embeddings via scikit-learn (no network/GPU) |
-| `backend/app/knowledge/memory_store.py` | In-process vector store (numpy cosine similarity) |
-| `backend/app/knowledge/ingestion.py` | Chunk → embed → index pipeline with duplicate prevention |
-| `backend/app/knowledge/retrieval.py` | Query embedding + ranked retrieval with provenance |
-| `backend/app/knowledge/citations.py` | Citation builder (dedupe by filename/page/section) |
-| `backend/app/knowledge/rag_service.py` | Retrieve → grounded prompt → local LLM → answer + citations |
-| `backend/app/api/knowledge.py` | Ingest / search / query / list / delete knowledge endpoints |
-| `backend/app/tools/rag_tool.py` | `knowledge_search` agent tool |
-| `backend/app/models/llama_cpp_provider.py` | Local-only llama.cpp provider with air-gap enforcement |
-| `backend/app/security/audit.py` | Audit logging (metadata only; no chunk/document text) |
+| `backend/app/main.py` | FastAPI entry point; wires persistent storage, document processors, knowledge services, and agent registries |
+| `backend/app/config.py` | Central configuration with persistent paths (`SAW_KNOWLEDGE_DB_PATH`, `SAW_VECTOR_STORAGE_PATH`, `SAW_DOCUMENT_DB_PATH`), chunking settings, and retrieval thresholds |
+| `backend/app/documents/*` | Document Intelligence (TXT/PDF/DOCX/OCR, DocumentStore with SQLite persistence, sanitization) |
+| `backend/app/knowledge/models.py` | Domain models (`KnowledgeDocument`, `KnowledgeChunk`, `EvidenceQuality`, `EmbeddingConfig`, `RAGMetrics`, `Citation`, `RAGResponse`) |
+| `backend/app/knowledge/persistence.py` | `KnowledgeMetadataStore` — SQLite-backed metadata persistence in WAL mode with foreign key cascade, indexing, and embedding fingerprint tracking |
+| `backend/app/knowledge/persistent_store.py` | `PersistentVectorStore` — generation-consistent NumPy `.npz` vector storage with integrity manifests, checksum validation, and fail-closed corruption handling |
+| `backend/app/knowledge/chunking.py` | Paragraph/sentence chunking with page/section provenance and deterministic chunk hashes |
+| `backend/app/knowledge/embeddings.py` | `EmbeddingProvider` ABC with explicit versioning and `EmbeddingConfig` compatibility |
+| `backend/app/knowledge/tfidf_embeddings.py` | Local TF-IDF embeddings via scikit-learn (512 dims, zero network, zero GPU) |
+| `backend/app/knowledge/ingestion.py` | Ingestion pipeline with SHA-256 deduplication, state transitions (`PROCESSING`, `INDEXED`, `FAILED`, `STALE`), and stale vector cleanup |
+| `backend/app/knowledge/retrieval.py` | Query embedding, cosine search, similarity threshold filtering, and deterministic `classify_evidence` logic |
+| `backend/app/knowledge/citations.py` | Provenance citation builder (deduplication by filename, page number, and section) |
+| `backend/app/knowledge/rag_service.py` | RAG service with context truncation bounds, evidence quality prompt branch, and end-to-end metrics |
+| `backend/app/knowledge/evaluation.py` | Synthetic industrial retrieval evaluation dataset and benchmarking framework (Recall@K, Precision@K) |
+| `backend/app/api/knowledge.py` | Knowledge API endpoints for ingestion, search, query, listing, and deletion |
+| `backend/app/tools/rag_tool.py` | `knowledge_search` agent tool for the orchestrator |
+| `backend/app/models/llama_cpp_provider.py` | Local-only llama.cpp provider with air-gap loopback enforcement |
+| `backend/app/security/audit.py` | Append-only structured audit logging (metadata only; never logs raw chunk or document bodies). NOT tamper-evident — see docstring |
+| `backend/app/security/network_monitor.py` | Air-gap compliance verification — validates all configured endpoints are loopback-only |
 
 ## Getting Started
 
 ### Prerequisites
 
 - Python 3.11+
+- Tesseract OCR (optional, for scanned documents/images)
 
 ### Setup
 
 ```bash
-# Clone the repository
+# Clone repository
 git clone <repo-url>
 cd sovereign-ai-workbench
 
@@ -102,21 +114,19 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 The API will be available at `http://localhost:8000`.
 
-- Root: `GET /`
-- Health: `GET /health`
-- Run agent: `POST /agent/run`
-- List models: `GET /models/`
+- Root status: `GET /`
+- System health: `GET /health`
+- Agent execution: `POST /agent/run`
+- Model registry: `GET /models/`
 - Upload document: `POST /files/upload`
-- List uploaded documents: `GET /files/`
-- Get document details: `GET /files/{id}`
-- Delete document: `DELETE /files/{id}`
+- List documents: `GET /files/`
 - Analyze document: `POST /documents/{id}/analyze`
-- Ingest into knowledge base: `POST /knowledge/ingest/{document_id}`
-- Search knowledge: `POST /knowledge/search`
+- Ingest into KB: `POST /knowledge/ingest/{document_id}`
+- Search KB: `POST /knowledge/search`
 - RAG query: `POST /knowledge/query`
-- List knowledge docs: `GET /knowledge/documents`
-- Delete knowledge doc: `DELETE /knowledge/documents/{document_id}`
-- API docs: `GET /docs`
+- List KB documents: `GET /knowledge/documents`
+- Delete KB document: `DELETE /knowledge/documents/{document_id}`
+- Interactive OpenAPI docs: `GET /docs`
 
 ### Run Tests
 
@@ -140,65 +150,26 @@ pytest -v
 curl http://localhost:8000/health
 ```
 
+Response:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2026-09-11T12:00:00Z",
+  "version": "0.6.1",
+  "models_registered": ["general"],
+  "tools_registered": ["calculator", "file_reader"],
+  "document_processors": [".txt", ".pdf", ".docx"],
+  "knowledge_documents": 4,
+  "knowledge_chunks": 18,
+  "embedding_provider": "tfidf-512"
+}
+```
+
 ### Upload a Document (TXT, PDF, DOCX)
 
 ```bash
 curl -X POST http://localhost:8000/files/upload \
-  -F "file=@/path/to/safety_report.pdf"
-```
-
-Response:
-```json
-{
-  "id": "a1b2c3d4-...",
-  "filename": "safety_report.pdf",
-  "file_type": "pdf",
-  "size_bytes": 1048576,
-  "status": "text_extracted",
-  "page_count": 5,
-  "character_count": 12400,
-  "has_ocr_content": false,
-  "created_at": "2026-09-08T12:00:00Z"
-}
-```
-
-### Analyze Document via Local LLM
-
-```bash
-curl -X POST http://localhost:8000/documents/a1b2c3d4-.../analyze \
-  -H "Content-Type: application/json" \
-  -d '{"instruction": "Focus on critical safety hazards and immediate remediation steps."}'
-```
-
-Response:
-```json
-{
-  "document_id": "a1b2c3d4-...",
-  "filename": "safety_report.pdf",
-  "model_used": "gemma-3-4b-it",
-  "summary": "The document outlines inspection results for Unit 4 turbine bearings...",
-  "key_findings": [
-    "Vibration level exceeds baseline by 34%",
-    "Lubrication oil contamination detected in sample B"
-  ],
-  "risks": [
-    "High risk of bearing seizure if operated continuously above 3000 RPM"
-  ],
-  "action_items": [
-    "Schedule emergency bearing inspection within 48 hours",
-    "Replace oil filter and flush lubrication lines"
-  ],
-  "raw_response": "...",
-  "execution_time_ms": 420.5
-}
-```
-
-### Run Agent Task
-
-```bash
-curl -X POST http://localhost:8000/agent/run \
-  -H "Content-Type: application/json" \
-  -d '{"task": "Analyze an inspection report"}'
+  -F "file=@/path/to/Maintenance_SOP.pdf"
 ```
 
 ### Ingest Document into Knowledge Base
@@ -207,66 +178,96 @@ curl -X POST http://localhost:8000/agent/run \
 curl -X POST http://localhost:8000/knowledge/ingest/a1b2c3d4-...
 ```
 
+Response:
+```json
+{
+  "document_id": "a1b2c3d4-...",
+  "filename": "Maintenance_SOP.pdf",
+  "file_type": "pdf",
+  "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "chunk_count": 6,
+  "ingestion_status": "indexed",
+  "embedding_provider": "tfidf-512",
+  "embedding_version": 1,
+  "ingested_at": "2026-09-11T12:01:00Z",
+  "ingestion_time_ms": 14.2,
+  "embedding_time_ms": 5.1
+}
+```
+
 ### Search Knowledge Base
 
 ```bash
 curl -X POST http://localhost:8000/knowledge/search \
   -H "Content-Type: application/json" \
-  -d '{"query": "vibration threshold bearing", "top_k": 5}'
+  -d '{"query": "vibration threshold bearing", "top_k": 5, "similarity_threshold": 0.05}'
 ```
 
-### RAG Query (retrieve + local LLM answer + citations)
+### RAG Query (Grounded Answer + Citations + Quality Metrics)
 
 ```bash
 curl -X POST http://localhost:8000/knowledge/query \
   -H "Content-Type: application/json" \
-  -d '{"query": "What PPE is required for maintenance?", "top_k": 5}'
+  -d '{"query": "What is the maximum allowable vibration before immediate inspection?", "top_k": 3, "similarity_threshold": 0.05}'
 ```
 
-## Knowledge Base & RAG Pipeline
+Response:
+```json
+{
+  "query": "What is the maximum allowable vibration before immediate inspection?",
+  "answer": "If vibration exceeds 4.5 mm/s RMS, schedule immediate inspection.",
+  "citations": [
+    {
+      "document_id": "a1b2c3d4-...",
+      "document": "Maintenance_SOP.pdf",
+      "page": 1,
+      "section": "5. CORRECTIVE ACTIONS",
+      "chunk_id": "a1b2c3d4::4",
+      "relevance_score": 0.62
+    }
+  ],
+  "model_used": "gemma-3-4b-it",
+  "retrieval_count": 1,
+  "retrieval_time_ms": 2.4,
+  "generation_time_ms": 340.1,
+  "total_time_ms": 344.2,
+  "evidence_sufficient": true,
+  "evidence_quality": "strong_evidence",
+  "embedding_time_ms": 0.0,
+  "context_construction_time_ms": 0.8,
+  "similarity_threshold": 0.05,
+  "candidates_count": 1
+}
+```
 
-1. **Chunking**: Paragraph/sentence-aware splits (`chunk_size=800`, `overlap=100`) with page/section provenance and deterministic chunk IDs.
-2. **Embeddings**: Local TF-IDF via scikit-learn (`TfidfEmbeddingProvider`, default 512 dims). No model download, no GPU, no network. `EmbeddingProvider` ABC allows drop-in replacement with sentence-transformers later.
-3. **Vector store**: `InMemoryVectorStore` — numpy cosine similarity, in-process only.
-4. **Ingestion**: Document → chunk → embed → index; duplicate prevention and force re-index.
-5. **Retrieval**: Query embed → top-k ranked chunks with filename/page/section provenance.
-6. **Citations**: Deduplicated by `(filename, page, section)`.
-7. **RAG**: Grounded prompt → Gemma 3 (llama.cpp) or DummyLocalModel → answer + citations; insufficient-evidence handling when KB is empty.
+## Hardened Knowledge Base & RAG Architecture
 
-## Supported Document Formats & Pipeline
-
-- **Plain Text (`.txt`)**: UTF-8 and Latin-1 support with character truncation controls.
-- **PDF (`.pdf`)**: Native text extraction via `pypdf` with per-page tracking; automatic fallback to OCR for scanned/image-only PDFs.
-- **Word (`.docx`)**: Structured paragraph extraction and document core properties metadata via `python-docx`.
-- **Scanned Documents (OCR)**: Local OCR using Tesseract 5.x and `pdf2image` (Poppler) preserving per-page confidence scores. Zero external API calls.
+1. **Persistent SQLite Metadata**: `knowledge.db` stores document statuses (`PROCESSING`, `INDEXED`, `FAILED`, `STALE`), chunk spans, page numbers, sections, hashes, and embedding fingerprints with WAL mode enabled.
+2. **Persistent NumPy Vectors**: `PersistentVectorStore` manages dense embedding matrices using a generation-consistent storage model with integrity manifests, SHA-256 checksums, and fail-closed corruption handling. Corrupted storage is never silently converted to empty state.
+3. **Deterministic Deduplication**: Ingestion computes SHA-256 text hashes. Duplicate uploads skip re-embedding; modified documents purge stale vectors before re-indexing.
+4. **Embedding Versioning & Fingerprinting**: `EmbeddingConfig` captures provider name, model identifier, version, and dimension. Any incompatible embedding change triggers automatic marking of documents as `STALE`.
+5. **Retrieval Thresholding & Quality Classification**:
+   - `NO_EVIDENCE`: No chunks retrieved or all scores below threshold. The RAG pipeline refuses to fabricate answers.
+   - `WEAK_EVIDENCE`: Top score between weak and sufficient thresholds. Prompts include cautionary grounding.
+   - `SUFFICIENT_EVIDENCE`: At least one chunk meets operational confidence.
+   - `STRONG_EVIDENCE`: Multiple independent chunks exhibit high similarity scores.
+6. **Citation Provenance Integrity**: Citations strictly reference actual chunks retrieved and included in the prompt, deduplicated by `(filename, page, section)`.
+7. **Synthetic Evaluation Testbed**: `backend/app/knowledge/evaluation.py` provides deterministic regression benchmarks verifying Recall@K and Precision@K on industrial SOPs and manuals.
+8. **Restart-Safe Document Store**: `DocumentMetadataStore` persists document metadata to SQLite, enabling the `DocumentStore` to reconstruct its registry after process restarts without loading full document text into memory.
+9. **Network Compliance Verification**: `NetworkMonitor` validates all configured endpoints against the loopback allowlist at startup, providing visible proof of air-gap compliance in the health endpoint.
 
 ## Security & Privacy Controls
 
-- **Air-Gap Enforcement**: `LlamaCppProvider` strictly rejects non-loopback URLs (`127.0.0.1`, `localhost`, `[::1]`).
-- **Local-only embeddings/store**: TF-IDF and in-memory vector store require zero network.
-- **File Ingestion Security**: Path traversal prevention (`sanitize_filename`), file size limits (50 MB default), PDF page limits (200 pages default), character extraction limits (500k chars default), and extension whitelist enforcement.
-- **Audit Logging**: Uploads, ingest, query, and delete are logged as metadata only — never chunk/document body text.
+- **Air-Gap Enforcement**: `LlamaCppProvider` strictly accepts only loopback URLs (`127.0.0.1`, `localhost`, `[::1]`). External addresses and cloud endpoints are rejected at instantiation. `NetworkMonitor` independently verifies all endpoint configurations at startup.
+- **Strictly Local Vectors & Embeddings**: All embeddings (TF-IDF), vector computations (NumPy), and metadata storage (SQLite) operate entirely in-process and on-disk without network calls.
+- **Path Traversal Protection**: All file operations enforce workspace boundaries and sanitized filenames.
+- **Audit Logging**: Uploads, ingestions, RAG queries, and deletions record metadata, timestamps, and run identifiers. Document text and chunk bodies are never written to audit logs. NOTE: The current audit log is append-only but NOT tamper-evident (no hash chaining). True tamper-evidence is planned for a future phase.
 
 ## Current Limitations
 
-- TF-IDF is lexical (no paraphrase/cross-lingual semantics); neural embeddings deferred until offline install is available.
-- Vector store is in-memory only (not durable across restarts).
-- Multi-step agentic planning with automatic tool invocation
-- Sandboxed code execution
-- Document generation (export to DOCX, PPTX, XLSX)
-- Multimodal vision model integration (direct image tokens)
-- Web-based frontend UI
-- Role-based access control and authentication
-
-## Future Phases
-
-1. **Neural Embeddings** — Offline sentence-transformers when network/packages allow
-2. **Persistent Vector Store** — Disk-backed local index
-3. **Agentic Planning** — Multi-step task decomposition and tool use
-4. **Multimodal Support** — Image/drawing understanding via vision models
-5. **Security Hardening** — Network monitoring, air-gap proof, auth
-6. **Frontend** — Web UI for task submission and result viewing
-7. **Deployment** — Docker, on-premise packaging, air-gapped install
+- TF-IDF embedding provider is lexical; semantic/neural embedding support (e.g., local ONNX / sentence-transformers) will be added once bundled offline model weights are integrated.
+- Sandboxed code execution engine is under development for subsequent releases.
+- Deliverable export (DOCX, PPTX, XLSX generation) is scheduled for upcoming phases.
 
 ## License
 

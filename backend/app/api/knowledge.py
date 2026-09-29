@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from app.knowledge.models import (
     Citation,
+    EvidenceQuality,
     IngestionStatus,
     KnowledgeDocument,
     RAGResponse,
@@ -45,6 +46,7 @@ class IngestResponse(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     top_k: int = Field(default=5, ge=1, le=50)
+    similarity_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class SearchResult(BaseModel):
@@ -61,11 +63,13 @@ class SearchResponse(BaseModel):
     query: str
     results: list[SearchResult]
     retrieval_time_ms: float
+    evidence_quality: str = EvidenceQuality.NO_EVIDENCE.value
 
 
 class QueryRequest(BaseModel):
     query: str
     top_k: int = Field(default=5, ge=1, le=50)
+    similarity_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class QueryResponse(BaseModel):
@@ -78,6 +82,8 @@ class QueryResponse(BaseModel):
     generation_time_ms: float
     total_time_ms: float
     evidence_sufficient: bool
+    evidence_quality: str = EvidenceQuality.NO_EVIDENCE.value
+    similarity_threshold: float = 0.0
 
 
 class KnowledgeDocumentResponse(BaseModel):
@@ -89,6 +95,8 @@ class KnowledgeDocumentResponse(BaseModel):
     ingested_at: str | None
     ingestion_time_ms: float
     embedding_time_ms: float
+    content_hash: str = ""
+    error_info: str | None = None
 
 
 # --- Endpoints ---
@@ -181,8 +189,19 @@ def search_knowledge(body: SearchRequest, request: Request) -> SearchResponse:
         raise HTTPException(status_code=422, detail="Query must not be empty.")
 
     results, retrieval_time = retriever.retrieve(
-        query=body.query, top_k=body.top_k
+        query=body.query,
+        top_k=body.top_k,
+        similarity_threshold=body.similarity_threshold,
     )
+
+    from app.knowledge.retrieval import classify_evidence
+
+    threshold = (
+        body.similarity_threshold
+        if body.similarity_threshold is not None
+        else retriever.similarity_threshold
+    )
+    quality = classify_evidence(results, threshold)
 
     return SearchResponse(
         query=body.query,
@@ -199,6 +218,7 @@ def search_knowledge(body: SearchRequest, request: Request) -> SearchResponse:
             for r in results
         ],
         retrieval_time_ms=round(retrieval_time, 2),
+        evidence_quality=quality.value,
     )
 
 
@@ -222,7 +242,11 @@ def query_knowledge(body: QueryRequest, request: Request) -> QueryResponse:
         raise HTTPException(status_code=422, detail="Query must not be empty.")
 
     try:
-        rag_response = rag_service.query(query=body.query, top_k=body.top_k)
+        rag_response = rag_service.query(
+            query=body.query,
+            top_k=body.top_k,
+            similarity_threshold=body.similarity_threshold,
+        )
     except Exception as exc:
         logger.error("RAG query failed: %s", exc)
         raise HTTPException(
@@ -240,6 +264,7 @@ def query_knowledge(body: QueryRequest, request: Request) -> QueryResponse:
                 "query_length": len(body.query),
                 "retrieval_count": rag_response.retrieval_count,
                 "evidence_sufficient": rag_response.evidence_sufficient,
+                "evidence_quality": rag_response.evidence_quality.value,
                 "retrieval_time_ms": rag_response.retrieval_time_ms,
                 "generation_time_ms": rag_response.generation_time_ms,
                 "total_time_ms": rag_response.total_time_ms,
@@ -257,6 +282,8 @@ def query_knowledge(body: QueryRequest, request: Request) -> QueryResponse:
         generation_time_ms=rag_response.generation_time_ms,
         total_time_ms=rag_response.total_time_ms,
         evidence_sufficient=rag_response.evidence_sufficient,
+        evidence_quality=rag_response.evidence_quality.value,
+        similarity_threshold=rag_response.similarity_threshold,
     )
 
 
@@ -283,6 +310,8 @@ def list_knowledge_documents(
             ingested_at=d.ingested_at,
             ingestion_time_ms=d.ingestion_time_ms,
             embedding_time_ms=d.embedding_time_ms,
+            content_hash=d.content_hash,
+            error_info=d.error_info,
         )
         for d in docs
     ]

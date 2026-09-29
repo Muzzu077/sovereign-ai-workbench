@@ -605,6 +605,10 @@ class TestUploadAPI:
     def client(self, tmp_path):
         import os
         os.environ["SAW_UPLOAD_DIR"] = str(tmp_path / "uploads")
+        os.environ["SAW_DOCUMENT_DB_PATH"] = str(tmp_path / "documents.db")
+        os.environ["SAW_KNOWLEDGE_DB_PATH"] = str(tmp_path / "knowledge.db")
+        os.environ["SAW_VECTOR_STORAGE_PATH"] = str(tmp_path / "vectors")
+        os.environ["SAW_AUDIT_LOG_FILE"] = str(tmp_path / "audit.log")
         from fastapi.testclient import TestClient
         from app.main import create_app
         app = create_app()
@@ -698,6 +702,10 @@ class TestListGetDeleteAPI:
     def client(self, tmp_path):
         import os
         os.environ["SAW_UPLOAD_DIR"] = str(tmp_path / "uploads")
+        os.environ["SAW_DOCUMENT_DB_PATH"] = str(tmp_path / "documents.db")
+        os.environ["SAW_KNOWLEDGE_DB_PATH"] = str(tmp_path / "knowledge.db")
+        os.environ["SAW_VECTOR_STORAGE_PATH"] = str(tmp_path / "vectors")
+        os.environ["SAW_AUDIT_LOG_FILE"] = str(tmp_path / "audit.log")
         from fastapi.testclient import TestClient
         from app.main import create_app
         app = create_app()
@@ -766,6 +774,10 @@ class TestAnalysisAPI:
     def client(self, tmp_path):
         import os
         os.environ["SAW_UPLOAD_DIR"] = str(tmp_path / "uploads")
+        os.environ["SAW_DOCUMENT_DB_PATH"] = str(tmp_path / "documents.db")
+        os.environ["SAW_KNOWLEDGE_DB_PATH"] = str(tmp_path / "knowledge.db")
+        os.environ["SAW_VECTOR_STORAGE_PATH"] = str(tmp_path / "vectors")
+        os.environ["SAW_AUDIT_LOG_FILE"] = str(tmp_path / "audit.log")
         from fastapi.testclient import TestClient
         from app.main import create_app
         app = create_app()
@@ -866,6 +878,10 @@ class TestHealthEndpointDocuments:
     def client(self, tmp_path):
         import os
         os.environ["SAW_UPLOAD_DIR"] = str(tmp_path / "uploads")
+        os.environ["SAW_DOCUMENT_DB_PATH"] = str(tmp_path / "documents.db")
+        os.environ["SAW_KNOWLEDGE_DB_PATH"] = str(tmp_path / "knowledge.db")
+        os.environ["SAW_VECTOR_STORAGE_PATH"] = str(tmp_path / "vectors")
+        os.environ["SAW_AUDIT_LOG_FILE"] = str(tmp_path / "audit.log")
         from fastapi.testclient import TestClient
         from app.main import create_app
         app = create_app()
@@ -918,6 +934,9 @@ class TestAuditDocumentOps:
         import os
         os.environ["SAW_UPLOAD_DIR"] = str(tmp_path / "uploads")
         os.environ["SAW_AUDIT_LOG_FILE"] = str(tmp_path / "audit.log")
+        os.environ["SAW_DOCUMENT_DB_PATH"] = str(tmp_path / "documents.db")
+        os.environ["SAW_KNOWLEDGE_DB_PATH"] = str(tmp_path / "knowledge.db")
+        os.environ["SAW_VECTOR_STORAGE_PATH"] = str(tmp_path / "vectors")
         from fastapi.testclient import TestClient
         from app.main import create_app
         app = create_app()

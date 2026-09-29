@@ -670,3 +670,61 @@ class TestMmprojConfig:
         s = Settings(llm_enabled=False)
         assert hasattr(s, "llm_mmproj_path")
         assert "mmproj" in s.llm_mmproj_path
+
+
+# -------------------------------- inference endpoint & fallback tests
+
+
+class TestModelInferenceEndpoint:
+    """Tests for POST /models/inference and fallback handling."""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        from app.main import create_app
+        app = create_app()
+        with TestClient(app) as c:
+            yield c
+
+    def test_inference_endpoint_success_with_local(self, client) -> None:
+        resp = client.post(
+            "/models/inference",
+            json={"prompt": "Explain air-gap", "model_name": "local"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "text" in data
+        assert data["model_name"] == "dummy-local"
+        assert data["provider"] == "dummy"
+        assert data["duration_ms"] >= 0
+
+    def test_inference_endpoint_empty_prompt_rejected(self, client) -> None:
+        resp = client.post(
+            "/models/inference",
+            json={"prompt": "   ", "model_name": "local"},
+        )
+        assert resp.status_code == 422
+
+    def test_inference_endpoint_unknown_model_returns_404(self, client) -> None:
+        resp = client.post(
+            "/models/inference",
+            json={"prompt": "Hello", "model_name": "non-existent-model"},
+        )
+        assert resp.status_code == 404
+
+    def test_inference_fallback_when_general_server_down(self, monkeypatch) -> None:
+        monkeypatch.setenv("SAW_LLM_ENABLED", "true")
+        from fastapi.testclient import TestClient
+        from app.main import create_app
+        app = create_app()
+        with TestClient(app) as client:
+            # Requesting "general" while llama-server is down falls back to "local"
+            with patch.object(httpx, "get", side_effect=httpx.ConnectError("refused")):
+                resp = client.post(
+                    "/models/inference",
+                    json={"prompt": "Summarize policy", "model_name": "general"},
+                )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["fallback_used"] is True
+            assert "text" in data
