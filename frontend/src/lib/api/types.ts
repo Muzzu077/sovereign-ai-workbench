@@ -385,3 +385,125 @@ export interface ModelInferenceResponse {
   fallback_used: boolean;
   metadata: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// Code Execution (Sandbox)
+// ---------------------------------------------------------------------------
+
+export interface ExecuteRequest {
+  code: string;
+  language?: string;
+  timeout?: number;
+}
+
+export interface ExecuteResponse {
+  stdout: string;
+  stderr: string;
+  exit_code: number;
+  engine: "docker" | "local_fallback";
+}
+
+export interface ExecutionHealth {
+  docker_available: boolean;
+  engine: "docker" | "local_fallback";
+  status: string;
+}
+
+// ---------------------------------------------------------------------------
+// Code Generation (SSE streaming)
+// ---------------------------------------------------------------------------
+
+export interface CodeGenRequest {
+  prompt: string;
+  max_tokens?: number;
+}
+
+export interface CodeGenHealth {
+  model: string;
+  status: string;
+  endpoint: string;
+}
+
+// ---------------------------------------------------------------------------
+// Studio / Export
+// ---------------------------------------------------------------------------
+
+export interface ExportRequest {
+  title: string;
+  content: string;
+  format?: "docx";
+}
+
+// ---------------------------------------------------------------------------
+// Approval Workflow
+// ---------------------------------------------------------------------------
+
+export interface ApprovalNoteCitation {
+  document_id: string;
+  filename: string;
+  page: number | null;
+  section: string | null;
+  relevance_score: number;
+}
+
+export interface ApprovalNoteResult {
+  run_id: string;
+  document_id: string;
+  model: string;
+  steps: Array<{
+    step: string;
+    status: string;
+    elapsed_ms?: number;
+    [key: string]: unknown;
+  }>;
+  findings: string;
+  citations: ApprovalNoteCitation[];
+  note_markdown: string;
+  download_url: string;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming Chat (SSE)
+// ---------------------------------------------------------------------------
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface StreamChatRequest {
+  messages: ChatMessage[];
+  model_name?: string;
+  system_prompt?: string;
+  max_tokens?: number;
+  temperature?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Audit Logs
+// ---------------------------------------------------------------------------
+
+export interface LogEntry {
+  timestamp: string;
+  task: string;
+  selected_model: string;
+  execution_status: string;
+  metadata: Record<string, unknown>;
+  category: string;
+  description: string;
+}
+
+export interface LogsResponse {
+  total: number;
+  offset: number;
+  limit: number;
+  entries: LogEntry[];
+}
+
+export interface LogStats {
+  total_records: number;
+  by_status: Record<string, number>;
+  by_category: Record<string, number>;
+  first_record: string | null;
+  last_record: string | null;
+}

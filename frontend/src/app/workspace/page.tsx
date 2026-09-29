@@ -9,6 +9,8 @@ import {
   queryKnowledge,
   runAgent,
   testModelInference,
+  streamChat,
+  exportToDocx,
 } from "@/lib/api/client";
 import type {
   Citation,
@@ -25,6 +27,7 @@ import {
   Sparkles,
   Shield,
   HardDrive,
+  Download,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -267,20 +270,88 @@ export default function WorkspacePage() {
               timestamp: new Date().toISOString(),
             };
           } else {
-            const response = await testModelInference({
-              prompt: text,
-              model_name: "general",
-            });
-            assistantMsg = {
-              id: makeId(),
-              role: "assistant",
-              content: response.text,
-              model: response.model_name,
-              provider: response.provider,
-              tokensUsed: response.tokens_used,
-              fallbackUsed: response.fallback_used,
-              timestamp: new Date().toISOString(),
-            };
+            // Stream chat from local LLM via SSE
+            const streamMsgId = makeId();
+            let streamContent = "";
+            let tokenCount = 0;
+
+            // Insert placeholder message
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: streamMsgId,
+                role: "assistant",
+                content: "",
+                model: "local",
+                provider: "llama_cpp",
+                timestamp: new Date().toISOString(),
+              },
+            ]);
+
+            try {
+              const chatMessages = messages.map((m) => ({
+                role: m.role,
+                content: m.content,
+              }));
+              chatMessages.push({ role: "user", content: text });
+
+              for await (const { event, data } of streamChat({
+                messages: chatMessages,
+              })) {
+                if (event === "token") {
+                  streamContent += JSON.parse(data);
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === streamMsgId
+                        ? { ...m, content: streamContent }
+                        : m,
+                    ),
+                  );
+                } else if (event === "done") {
+                  const info = JSON.parse(data);
+                  tokenCount = info.tokens ?? 0;
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === streamMsgId
+                        ? { ...m, tokensUsed: tokenCount }
+                        : m,
+                    ),
+                  );
+                } else if (event === "error") {
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === streamMsgId
+                        ? { ...m, content: `Error: ${JSON.parse(data)}` }
+                        : m,
+                    ),
+                  );
+                }
+              }
+            } catch (err) {
+              // Fallback to non-streaming if SSE fails
+              const response = await testModelInference({
+                prompt: text,
+                model_name: "general",
+              });
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === streamMsgId
+                    ? {
+                        ...m,
+                        content: response.text,
+                        model: response.model_name,
+                        provider: response.provider,
+                        tokensUsed: response.tokens_used,
+                        fallbackUsed: response.fallback_used,
+                      }
+                    : m,
+                ),
+              );
+            }
+
+            // Skip the normal message append below — streaming already set it
+            setLoading(false);
+            return;
           }
         }
 

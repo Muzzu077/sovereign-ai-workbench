@@ -14,6 +14,8 @@ import {
   Upload,
   Plus,
   Zap,
+  Code2,
+  ScrollText,
 } from "lucide-react";
 
 interface CommandItem {
@@ -84,6 +86,26 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
       icon: Activity,
       action: () => {
         router.push("/health");
+        onClose();
+      },
+    },
+    {
+      id: "nav-code",
+      title: "Go to Code Sandbox",
+      category: "Navigation",
+      icon: Code2,
+      action: () => {
+        router.push("/code");
+        onClose();
+      },
+    },
+    {
+      id: "nav-logs",
+      title: "Go to Audit Logs",
+      category: "Navigation",
+      icon: ScrollText,
+      action: () => {
+        router.push("/logs");
         onClose();
       },
     },

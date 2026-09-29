@@ -11,6 +11,8 @@ import {
   Cpu,
   PanelLeftClose,
   PanelLeftOpen,
+  Code2,
+  ScrollText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar, useSystemStatus } from "./ShellContext";
@@ -25,11 +27,13 @@ const NAV_PRIMARY: NavItem[] = [
   { label: "Workspace", href: "/workspace", icon: MessageSquare },
   { label: "Documents", href: "/documents", icon: FileText },
   { label: "Knowledge", href: "/knowledge", icon: BookOpen },
+  { label: "Code", href: "/code", icon: Code2 },
 ];
 
 const NAV_SECONDARY: NavItem[] = [
   { label: "Health", href: "/health", icon: Activity },
   { label: "Models", href: "/models", icon: Cpu },
+  { label: "Logs", href: "/logs", icon: ScrollText },
 ];
 
 export default function Sidebar() {

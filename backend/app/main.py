@@ -51,6 +51,14 @@ from app.api import files as files_api
 from app.api import models as models_api
 from app.api import documents as documents_api
 from app.api import knowledge as knowledge_api
+from app.api import execution as execution_api
+from app.api import codegen as codegen_api
+from app.api import studio as studio_api
+from app.api import workflows as workflows_api
+from app.api import chat as chat_api
+from app.api import logs as logs_api
+from app.services.export_service import ExportService
+from app.services.approval_workflow import ApprovalWorkflowService
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +239,19 @@ def create_app() -> FastAPI:
         app.state.rag_service = rag_service
         app.state.knowledge_search_tool = knowledge_search_tool
 
+        # Approval-note workflow (uses export, RAG, document store, audit)
+        export_service = ExportService()
+        approval_workflow = ApprovalWorkflowService(
+            registry=model_registry,
+            retriever=retriever,
+            ingestion_service=ingestion_service,
+            document_store=document_store,
+            export_service=export_service,
+            audit_service=audit_service,
+        )
+        app.state.export_service = export_service
+        app.state.approval_workflow = approval_workflow
+
         logger.info(
             "Sovereign AI Workbench started "
             "(tools=%s, processors=%s, upload_dir=%s, "
@@ -334,6 +355,12 @@ def create_app() -> FastAPI:
     app.include_router(models_api.router)
     app.include_router(documents_api.router)
     app.include_router(knowledge_api.router)
+    app.include_router(execution_api.router)
+    app.include_router(codegen_api.router)
+    app.include_router(studio_api.router)
+    app.include_router(workflows_api.router)
+    app.include_router(chat_api.router)
+    app.include_router(logs_api.router)
 
     return app
 

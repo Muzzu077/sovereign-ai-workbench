@@ -25,6 +25,15 @@ import type {
   RawModelsHealthResponse,
   ModelInferenceRequest,
   ModelInferenceResponse,
+  ExecuteRequest,
+  ExecuteResponse,
+  ExecutionHealth,
+  CodeGenRequest,
+  CodeGenHealth,
+  ExportRequest,
+  ApprovalNoteResult,
+  LogsResponse,
+  LogStats,
 } from "./types";
 
 const BASE_URL =
@@ -202,4 +211,187 @@ export function testModelInference(
   body: ModelInferenceRequest
 ): Promise<ModelInferenceResponse> {
   return json<ModelInferenceResponse>("/models/inference", body);
+}
+
+// ---------------------------------------------------------------------------
+// Code Execution (Sandbox)
+// ---------------------------------------------------------------------------
+
+export function executeCode(body: ExecuteRequest): Promise<ExecuteResponse> {
+  return json<ExecuteResponse>("/execution/run", body);
+}
+
+export function getExecutionHealth(): Promise<ExecutionHealth> {
+  return request<ExecutionHealth>("/execution/health");
+}
+
+/**
+ * Returns the WebSocket URL for streaming code execution output.
+ * Meant to be connected from xterm.js.
+ */
+export function getExecutionWsUrl(): string {
+  const wsBase = BASE_URL.replace(/^http/, "ws");
+  return `${wsBase}/execution/stream`;
+}
+
+// ---------------------------------------------------------------------------
+// Code Generation (SSE streaming)
+// ---------------------------------------------------------------------------
+
+export function getCodeGenHealth(): Promise<CodeGenHealth> {
+  return request<CodeGenHealth>("/codegen/health");
+}
+
+/**
+ * Stream code generation from the local LLM via SSE.
+ * Returns an EventSource-compatible URL + body for POST SSE.
+ * Use fetchEventSource or manual fetch with ReadableStream.
+ */
+export async function* streamCodeGen(
+  body: CodeGenRequest
+): AsyncGenerator<{ event: string; data: string }, void, unknown> {
+  const url = `${BASE_URL}/codegen/generate`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok || !res.body) {
+    throw new Error(`Code generation request failed: ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const lines = part.split("\n");
+      let event = "message";
+      let data = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        else if (line.startsWith("data: ")) data = line.slice(6);
+      }
+      if (data) yield { event, data };
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Studio / Export
+// ---------------------------------------------------------------------------
+
+/**
+ * Export markdown content to DOCX. Returns a Blob for download.
+ */
+export async function exportToDocx(body: ExportRequest): Promise<Blob> {
+  const url = `${BASE_URL}/studio/export`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Export failed: ${res.status}`);
+  }
+  return res.blob();
+}
+
+// ---------------------------------------------------------------------------
+// Approval Workflow
+// ---------------------------------------------------------------------------
+
+export async function runApprovalWorkflow(
+  documentId: string,
+  title?: string,
+  instructions?: string,
+): Promise<ApprovalNoteResult> {
+  const form = new FormData();
+  form.append("document_id", documentId);
+  if (title) form.append("title", title);
+  if (instructions) form.append("instructions", instructions);
+
+  return request<ApprovalNoteResult>("/workflows/approval-note", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export function downloadApprovalNote(documentId: string): string {
+  return `${BASE_URL}/workflows/approval-note/${encodeURIComponent(documentId)}/download`;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming Chat (SSE)
+// ---------------------------------------------------------------------------
+
+export async function* streamChat(
+  body: { messages: Array<{ role: string; content: string }>; max_tokens?: number; temperature?: number }
+): AsyncGenerator<{ event: string; data: string }, void, unknown> {
+  const url = `${BASE_URL}/chat/stream`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok || !res.body) {
+    throw new Error(`Chat stream request failed: ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const lines = part.split("\n");
+      let event = "message";
+      let data = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        else if (line.startsWith("data: ")) data = line.slice(6);
+      }
+      if (data) yield { event, data };
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Audit Logs
+// ---------------------------------------------------------------------------
+
+export function listLogs(params?: {
+  limit?: number;
+  offset?: number;
+  status?: string;
+  category?: string;
+}): Promise<LogsResponse> {
+  const sp = new URLSearchParams();
+  if (params?.limit) sp.set("limit", String(params.limit));
+  if (params?.offset) sp.set("offset", String(params.offset));
+  if (params?.status) sp.set("status", params.status);
+  if (params?.category) sp.set("category", params.category);
+  const qs = sp.toString();
+  return request<LogsResponse>(`/logs${qs ? `?${qs}` : ""}`);
+}
+
+export function getLogStats(): Promise<LogStats> {
+  return request<LogStats>("/logs/stats");
 }

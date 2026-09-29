@@ -9,7 +9,8 @@ import type {
   PlanStepItem,
   ToolCallItem,
 } from "@/lib/api/types";
-import { Copy, Check, ChevronRight, User2 } from "lucide-react";
+import { Copy, Check, ChevronRight, User2, Download } from "lucide-react";
+import { exportToDocx } from "@/lib/api/client";
 import EvidenceBadge from "./EvidenceBadge";
 import SourceCitation from "./SourceCitation";
 import ExecutionDetails from "./ExecutionDetails";
@@ -203,6 +204,25 @@ export default function ChatMessage({
     }
   };
 
+  const handleExportDocx = async () => {
+    try {
+      const blob = await exportToDocx({
+        title: "Sovereign AI Response",
+        content,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "sovereign_response.docx";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      // Silent fail — export is best-effort
+    }
+  };
+
   // ── User message ──────────────────────────────────────────────────────
   if (isUser) {
     return (
@@ -288,6 +308,21 @@ export default function ChatMessage({
             ) : (
               <Copy size={13} />
             )}
+          </button>
+
+          {/* Export DOCX action */}
+          <button
+            onClick={handleExportDocx}
+            className={cn(
+              "p-1 rounded-md wb-interactive",
+              "text-[var(--color-wb-text-faint)]",
+              "opacity-0 group-hover:opacity-100 hover:opacity-100",
+              "hover:text-[var(--color-wb-text)] hover:bg-[var(--color-wb-surface-hover)]",
+            )}
+            aria-label="Export as DOCX"
+            title="Export as DOCX"
+          >
+            <Download size={13} />
           </button>
         </div>
 

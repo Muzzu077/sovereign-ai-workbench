@@ -8,8 +8,10 @@ import {
   deleteFile,
   analyzeDocument,
   ingestDocument,
+  runApprovalWorkflow,
+  downloadApprovalNote,
 } from "@/lib/api/client";
-import type { FileInfo, AnalysisResult } from "@/lib/api/types";
+import type { FileInfo, AnalysisResult, ApprovalNoteResult } from "@/lib/api/types";
 import { cn, formatBytes, formatRelativeTime, copyToClipboard } from "@/lib/utils";
 import {
   Upload,
@@ -28,6 +30,8 @@ import {
   ListChecks,
   X,
   FileCode,
+  ClipboardCheck,
+  Download,
 } from "lucide-react";
 
 interface DocumentWithAnalysis extends FileInfo {
@@ -35,6 +39,8 @@ interface DocumentWithAnalysis extends FileInfo {
   analyzing?: boolean;
   ingesting?: boolean;
   ingestSuccess?: boolean;
+  approvalResult?: ApprovalNoteResult;
+  approvingNote?: boolean;
 }
 
 function FileTypeBadge({ extension }: { extension: string }) {
@@ -236,6 +242,31 @@ export default function DocumentsPage() {
         ),
       );
       setError(err instanceof Error ? err.message : "Ingestion failed");
+    }
+  }, []);
+
+  const handleApproval = useCallback(async (docId: string) => {
+    setDocuments((prev) =>
+      prev.map((d) =>
+        d.document_id === docId ? { ...d, approvingNote: true } : d,
+      ),
+    );
+    try {
+      const result = await runApprovalWorkflow(docId, undefined, undefined);
+      setDocuments((prev) =>
+        prev.map((d) =>
+          d.document_id === docId
+            ? { ...d, approvalResult: result, approvingNote: false }
+            : d,
+        ),
+      );
+    } catch (err) {
+      setDocuments((prev) =>
+        prev.map((d) =>
+          d.document_id === docId ? { ...d, approvingNote: false } : d,
+        ),
+      );
+      setError(err instanceof Error ? err.message : "Approval workflow failed");
     }
   }, []);
 
@@ -529,6 +560,32 @@ export default function DocumentsPage() {
                       </>
                     )}
                   </button>
+                  <button
+                    onClick={() => handleApproval(selectedDoc.document_id)}
+                    disabled={selectedDoc.approvingNote}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-lg border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] px-3.5 py-1.5 text-xs font-medium text-[var(--color-wb-text-secondary)] hover:bg-[var(--color-wb-surface-hover)] transition-colors cursor-pointer",
+                      selectedDoc.approvalResult && "border-[var(--color-wb-success-border)] text-[var(--color-wb-success)] bg-[var(--color-wb-success-bg)]",
+                      "disabled:opacity-50 disabled:cursor-not-allowed",
+                    )}
+                  >
+                    {selectedDoc.approvingNote ? (
+                      <>
+                        <Loader2 size={13} className="animate-spin-smooth text-[var(--color-wb-accent)]" />
+                        <span>Generating note...</span>
+                      </>
+                    ) : selectedDoc.approvalResult ? (
+                      <>
+                        <ClipboardCheck size={13} className="text-[var(--color-wb-success)]" />
+                        <span>Note Ready</span>
+                      </>
+                    ) : (
+                      <>
+                        <ClipboardCheck size={13} />
+                        <span>Approval Note</span>
+                      </>
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -605,6 +662,61 @@ export default function DocumentsPage() {
                       </ul>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Approval Note Result */}
+              {selectedDoc.approvalResult && (
+                <div className="space-y-4 animate-slide-up">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-wb-text-muted)]">
+                      Approval Note
+                    </h3>
+                    <a
+                      href={downloadApprovalNote(selectedDoc.document_id)}
+                      download
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-wb-accent)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--color-wb-accent-hover)] transition-colors shadow-sm"
+                    >
+                      <Download size={13} />
+                      Download DOCX
+                    </a>
+                  </div>
+
+                  {/* Pipeline steps */}
+                  <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-5 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-[var(--color-wb-text)] mb-3">
+                      <ClipboardCheck size={14} className="text-[var(--color-wb-accent)]" />
+                      Pipeline Steps
+                    </div>
+                    <div className="space-y-1.5">
+                      {selectedDoc.approvalResult.steps.map((step, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-wb-success)]" />
+                            <span className="text-[var(--color-wb-text-secondary)]">{step.step}</span>
+                          </div>
+                          {step.elapsed_ms != null && (
+                            <span className="text-[var(--color-wb-text-muted)] font-mono text-[10px]">
+                              {step.elapsed_ms}ms
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Generated note preview */}
+                  <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] p-5 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-[var(--color-wb-text)] mb-3">
+                      <FileText size={14} className="text-[var(--color-wb-accent)]" />
+                      Generated Note
+                    </div>
+                    <div className="prose prose-xs prose-stone max-w-none">
+                      <pre className="font-mono text-xs leading-relaxed text-[var(--color-wb-text-secondary)] whitespace-pre-wrap max-h-80 overflow-y-auto">
+                        {selectedDoc.approvalResult.note_markdown}
+                      </pre>
+                    </div>
+                  </div>
                 </div>
               )}
 

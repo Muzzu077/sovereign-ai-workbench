@@ -10,8 +10,10 @@ const TITLES: Record<string, string> = {
   "/workspace": "Workspace",
   "/documents": "Documents",
   "/knowledge": "Knowledge Base",
+  "/code": "Code Sandbox",
   "/health": "System Health",
   "/models": "Models",
+  "/logs": "Audit Logs",
 };
 
 interface TopBarProps {
