@@ -22,14 +22,15 @@ the AgentExecutor and ToolRegistry.
 from __future__ import annotations
 
 import logging
-from typing import Any
+import queue
+from typing import Any, Generator
 
 from pydantic import BaseModel
 
 from app.agents.executor import AgentExecutor, ExecutionResult, StepOutcome
 from app.agents.planner import TaskPlanner, ExecutionPlan
 from app.agents.router import TaskRouter, RouteResult
-from app.agents.trace import ExecutionTrace, EventType
+from app.agents.trace import ExecutionTrace, EventType, TraceEvent
 from app.agents.verifier import VerifierRegistry
 from app.models.base import GenerationRequest
 from app.models.registry import ModelRegistry
@@ -324,6 +325,244 @@ class AgentOrchestrator:
                 result=f"Execution failed: {exc}",
                 trace=trace.to_dicts(),
             )
+
+    def run_streaming(
+        self,
+        task: str,
+        model_name: str | None = None,
+    ) -> Generator[dict[str, Any], None, None]:
+        """Execute a task, yielding trace events as SSE-compatible dicts.
+
+        Each yielded dict has:
+            event: "trace" | "result" | "error"
+            data: dict — event payload (TraceEvent or OrchestratorResult)
+
+        This method runs synchronously. The caller (API endpoint)
+        should run it in a thread executor and iterate.
+        """
+        collected_events: list[dict[str, Any]] = []
+
+        def on_event(trace_event: TraceEvent) -> None:
+            collected_events.append(trace_event.model_dump())
+
+        # Create a trace with our callback
+        trace = ExecutionTrace(on_event=on_event)
+        trace.emit(EventType.TASK_RECEIVED, metadata={"task": task[:200]})
+
+        # Yield the initial event
+        while collected_events:
+            yield {"event": "trace", "data": collected_events.pop(0)}
+
+        # --- 1. Route ---
+        route = self._router.route(task)
+        trace.emit(
+            EventType.TASK_ROUTED,
+            metadata={
+                "task_type": route.task_type,
+                "tools_hint": route.tools_hint,
+            },
+        )
+        while collected_events:
+            yield {"event": "trace", "data": collected_events.pop(0)}
+
+        # --- 2. Resolve model ---
+        resolved_model_name = model_name or self._default_model
+        try:
+            provider = self._registry.get(resolved_model_name)
+        except KeyError as exc:
+            result = self._error_result(
+                task=task,
+                model_name=resolved_model_name,
+                error=f"Model selection failed: {exc}",
+                trace=trace,
+                route=route,
+            )
+            while collected_events:
+                yield {"event": "trace", "data": collected_events.pop(0)}
+            yield {"event": "result", "data": result.model_dump()}
+            return
+
+        provider_type = getattr(provider, "get_provider_type", lambda: "unknown")()
+
+        # --- 3. Plan ---
+        plan: ExecutionPlan | None = None
+        exec_result: ExecutionResult | None = None
+
+        if self._planner and route.task_type != "general":
+            try:
+                plan = self._planner.plan(task, route)
+                trace.emit(
+                    EventType.PLAN_CREATED,
+                    metadata={
+                        "steps": len(plan.steps),
+                        "tools": [s.tool for s in plan.steps],
+                    },
+                )
+            except Exception as exc:
+                result = self._error_result(
+                    task=task,
+                    model_name=resolved_model_name,
+                    provider_type=provider_type,
+                    error=f"Planning failed: {exc}",
+                    trace=trace,
+                    route=route,
+                )
+                while collected_events:
+                    yield {"event": "trace", "data": collected_events.pop(0)}
+                yield {"event": "result", "data": result.model_dump()}
+                return
+
+        while collected_events:
+            yield {"event": "trace", "data": collected_events.pop(0)}
+
+        # --- 4. Execute tools ---
+        if plan and plan.steps and self._executor:
+            exec_result = self._executor.execute(plan, trace)
+            # Draining events after tool execution
+            while collected_events:
+                yield {"event": "trace", "data": collected_events.pop(0)}
+
+            if not exec_result.success:
+                trace.emit(
+                    EventType.TASK_FAILED,
+                    metadata={"error": exec_result.error or "unknown"},
+                )
+                self._audit.record(
+                    task=task,
+                    selected_model=resolved_model_name,
+                    execution_status="error",
+                    metadata={
+                        "provider": provider_type,
+                        "local_inference": True,
+                        "task_type": route.task_type,
+                        "error": exec_result.error,
+                    },
+                )
+                while collected_events:
+                    yield {"event": "trace", "data": collected_events.pop(0)}
+                result = OrchestratorResult(
+                    run_id=trace.run_id,
+                    task=task,
+                    task_type=route.task_type,
+                    selected_model=resolved_model_name,
+                    provider=provider_type,
+                    execution_status="error",
+                    plan=self._plan_to_dicts(plan),
+                    tool_calls=self._outcomes_to_dicts(exec_result.outcomes),
+                    verification=self._verification_summary(exec_result.outcomes),
+                    result=f"Tool execution failed: {exec_result.error}",
+                    trace=trace.to_dicts(),
+                )
+                yield {"event": "result", "data": result.model_dump()}
+                return
+
+        # --- 5. Generate final LLM response ---
+        effective_model_name = resolved_model_name
+        if not provider.is_available():
+            available = self._registry.get_available(preferred="local")
+            if available is not None and available[1] is not provider:
+                fallback_name, fallback_provider = available
+                provider = fallback_provider
+                provider_type = getattr(provider, "get_provider_type", lambda: "dummy")()
+                effective_model_name = f"{fallback_name} (fallback)"
+            else:
+                result = self._error_result(
+                    task=task,
+                    model_name=resolved_model_name,
+                    provider_type=provider_type,
+                    error="Selected model is not currently available.",
+                    trace=trace,
+                    route=route,
+                    plan=plan,
+                    exec_result=exec_result,
+                )
+                while collected_events:
+                    yield {"event": "trace", "data": collected_events.pop(0)}
+                yield {"event": "result", "data": result.model_dump()}
+                return
+
+        try:
+            prompt = self._build_final_prompt(task, route, exec_result)
+            request = GenerationRequest(prompt=prompt)
+            try:
+                response = provider.generate(request)
+            except Exception as gen_err:
+                available = self._registry.get_available(preferred="local")
+                if available is not None and available[1] is not provider:
+                    fallback_name, fallback_provider = available
+                    provider = fallback_provider
+                    provider_type = getattr(provider, "get_provider_type", lambda: "dummy")()
+                    effective_model_name = f"{fallback_name} (fallback)"
+                    response = provider.generate(request)
+                else:
+                    raise gen_err
+
+            trace.emit(
+                EventType.TASK_COMPLETED,
+                metadata={
+                    "tokens_used": response.tokens_used,
+                    "provider": provider_type,
+                },
+            )
+            while collected_events:
+                yield {"event": "trace", "data": collected_events.pop(0)}
+
+            self._audit.record(
+                task=task,
+                selected_model=effective_model_name,
+                execution_status="success",
+                metadata={
+                    "tokens_used": response.tokens_used,
+                    "provider": provider_type,
+                    "model_name": response.model_name,
+                    "local_inference": True,
+                    "task_type": route.task_type,
+                    "tools_used": (
+                        [s.tool for s in plan.steps] if plan else []
+                    ),
+                },
+            )
+
+            result = OrchestratorResult(
+                run_id=trace.run_id,
+                task=task,
+                task_type=route.task_type,
+                selected_model=effective_model_name,
+                provider=provider_type,
+                execution_status="success",
+                plan=self._plan_to_dicts(plan) if plan else [],
+                tool_calls=self._outcomes_to_dicts(
+                    exec_result.outcomes if exec_result else []
+                ),
+                verification=self._verification_summary(
+                    exec_result.outcomes if exec_result else []
+                ),
+                result=response.text,
+                trace=trace.to_dicts(),
+            )
+            yield {"event": "result", "data": result.model_dump()}
+
+        except Exception as exc:
+            trace.emit(
+                EventType.TASK_FAILED,
+                metadata={"error": str(exc)},
+            )
+            while collected_events:
+                yield {"event": "trace", "data": collected_events.pop(0)}
+            self._audit.record(
+                task=task,
+                selected_model=effective_model_name,
+                execution_status="error",
+                metadata={
+                    "error": str(exc),
+                    "provider": provider_type,
+                    "local_inference": True,
+                },
+            )
+            yield {"event": "error", "data": {
+                "message": f"Execution failed: {exc}",
+                "run_id": trace.run_id,
+            }}
 
     # ---------------------------------------------------------- prompt building
 

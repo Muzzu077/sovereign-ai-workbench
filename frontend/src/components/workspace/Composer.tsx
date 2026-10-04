@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import {
   Paperclip,
@@ -11,6 +12,8 @@ import {
   FileSearch,
   Search,
   Bot,
+  Sparkles,
+  Zap,
 } from "lucide-react";
 import AttachmentChip from "./AttachmentChip";
 
@@ -23,15 +26,15 @@ interface ComposerProps {
 }
 
 const MODES = [
-  { key: "ask", label: "Ask", icon: MessageSquare, description: "General questions" },
-  { key: "analyze", label: "Analyze", icon: FileSearch, description: "Document analysis" },
-  { key: "knowledge", label: "Knowledge", icon: Search, description: "RAG search" },
-  { key: "agent", label: "Agent", icon: Bot, description: "Multi-step tasks" },
+  { key: "ask", label: "Direct Chat", icon: MessageSquare, description: "Direct local LLM reasoning" },
+  { key: "analyze", label: "Doc Analysis", icon: FileSearch, description: "Extract key findings & risks" },
+  { key: "knowledge", label: "Vector RAG", icon: Search, description: "Grounded neural vector store" },
+  { key: "agent", label: "Sandboxed Agent", icon: Bot, description: "Autonomous pipeline task" },
 ] as const;
 
 type Mode = (typeof MODES)[number]["key"];
 
-const DEFAULT_EXTENSIONS = [".pdf", ".docx", ".txt"];
+const DEFAULT_EXTENSIONS = [".pdf", ".docx", ".txt", ".md"];
 const MAX_ROWS = 8;
 
 export default function Composer({
@@ -53,7 +56,7 @@ export default function Composer({
   const acceptStr = extensions.join(",");
   const canSend = !disabled && (text.trim().length > 0 || files.length > 0);
 
-  // ── Auto-resize textarea ───────────────────────────────────────────
+  // Auto-resize textarea
   const resizeTextarea = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -67,7 +70,6 @@ export default function Composer({
     resizeTextarea();
   }, [text, resizeTextarea]);
 
-  // ── Handlers ───────────────────────────────────────────────────────
   const handleSend = useCallback(() => {
     if (!canSend) return;
     onSend(text.trim(), files, mode);
@@ -101,208 +103,182 @@ export default function Composer({
     setFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  const handleFileInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files) addFiles(e.target.files);
-      e.target.value = "";
-    },
-    [addFiles],
-  );
-
-  // ── Drag-and-drop ──────────────────────────────────────────────────
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(true);
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(false);
-  }, []);
-
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      e.stopPropagation();
       setDragOver(false);
-      if (e.dataTransfer.files) addFiles(e.dataTransfer.files);
+      if (e.dataTransfer.files.length > 0) {
+        addFiles(e.dataTransfer.files);
+      }
     },
     [addFiles],
   );
 
-  // ── Placeholder text per mode ──────────────────────────────────────
-  const placeholders: Record<Mode, string> = {
-    ask: "Ask the workbench anything...",
-    analyze: "Describe what to analyze, or drop a document...",
-    knowledge: "Search your local knowledge base...",
-    agent: "Describe a multi-step task to execute...",
-  };
-
   return (
-    <div
-      className={cn(
-        "relative flex flex-col",
-        "rounded-xl",
-        "border border-[var(--color-wb-border)]",
-        "bg-[var(--color-wb-bg)]",
-        "transition-all duration-[var(--duration-normal)]",
-        // Focus ring
-        focused && "border-[var(--color-wb-border-strong)] shadow-lg shadow-stone-900/5",
-        !focused && "shadow-sm",
-        // Drag state
-        dragOver && "border-[var(--color-wb-accent)] ring-2 ring-[var(--color-wb-accent)]/15 bg-[var(--color-wb-accent-subtle)]",
-        // Hero sizing
-        hero && "shadow-md",
-      )}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
-      {/* ── Drag overlay ──────────────────────────────────────────────── */}
-      {dragOver && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center rounded-xl bg-[var(--color-wb-accent-subtle)]/80 border-2 border-dashed border-[var(--color-wb-accent)] pointer-events-none backdrop-blur-[2px]">
-          <Upload size={20} className="text-[var(--color-wb-accent)] mb-1.5" />
-          <span className="text-sm font-medium text-[var(--color-wb-accent)]">
-            Drop files here
-          </span>
-          <span className="text-[10px] text-[var(--color-wb-text-muted)] mt-0.5">
-            PDF, DOCX, TXT
-          </span>
-        </div>
-      )}
-
-      {/* ── Mode tabs ─────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-1 px-3 pt-2.5 pb-0">
-        {MODES.map((m) => {
-          const Icon = m.icon;
-          const isActive = mode === m.key;
-          return (
-            <button
-              key={m.key}
-              type="button"
-              onClick={() => setMode(m.key)}
-              title={m.description}
-              className={cn(
-                "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg",
-                "text-[11px] font-medium",
-                "transition-all duration-[var(--duration-fast)]",
-                "cursor-pointer select-none",
-                isActive
-                  ? "bg-[var(--color-wb-accent-subtle)] text-[var(--color-wb-accent)] shadow-sm shadow-teal-900/5"
-                  : "text-[var(--color-wb-text-faint)] hover:text-[var(--color-wb-text-secondary)] hover:bg-[var(--color-wb-surface-hover)]",
-              )}
-            >
-              <Icon size={12} strokeWidth={isActive ? 2.2 : 1.8} />
-              {m.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── Attachment chips ──────────────────────────────────────────── */}
-      {files.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-3 pt-2.5">
-          {files.map((file, idx) => (
-            <AttachmentChip
-              key={`${file.name}-${file.size}-${idx}`}
-              file={file}
-              onRemove={() => removeFile(idx)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* ── Input row ─────────────────────────────────────────────────── */}
-      <div className={cn("flex items-end gap-2", hero ? "px-4 py-3" : "px-3 py-2.5")}>
-        {/* Attach button */}
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className={cn(
-            "flex items-center justify-center shrink-0",
-            "h-8 w-8 rounded-lg wb-interactive",
-            "text-[var(--color-wb-text-faint)]",
-            "hover:text-[var(--color-wb-text-secondary)] hover:bg-[var(--color-wb-surface-hover)]",
-          )}
-          aria-label="Attach files"
-        >
-          <Paperclip size={15} />
-        </button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept={acceptStr}
-          onChange={handleFileInputChange}
-          className="hidden"
-          tabIndex={-1}
-        />
-
-        {/* Textarea */}
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          placeholder={placeholders[mode]}
-          rows={1}
-          disabled={disabled}
-          className={cn(
-            "flex-1 resize-none bg-transparent",
-            "text-[var(--color-wb-text)]",
-            "placeholder:text-[var(--color-wb-text-faint)]",
-            "outline-none",
-            "disabled:opacity-50",
-            hero
-              ? "text-[15px] leading-[26px] py-1.5"
-              : "text-sm leading-[22px] py-1",
-          )}
-        />
-
-        {/* Send button */}
-        <button
-          type="button"
-          onClick={handleSend}
-          disabled={!canSend}
-          className={cn(
-            "flex items-center justify-center shrink-0",
-            "rounded-lg wb-interactive",
-            hero ? "h-9 w-9" : "h-8 w-8",
-            canSend
-              ? "bg-[var(--color-wb-accent)] text-white hover:bg-[var(--color-wb-accent-hover)] shadow-sm"
-              : "bg-[var(--color-wb-surface-active)] text-[var(--color-wb-text-faint)] cursor-not-allowed",
-          )}
-          aria-label="Send message"
-        >
-          {disabled ? (
-            <Loader2 size={16} className="animate-spin-smooth" />
-          ) : (
-            <ArrowUp size={16} strokeWidth={2.2} />
-          )}
-        </button>
-      </div>
-
-      {/* ── Keyboard hint ─────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-3 pb-2">
-        <span className="text-[10px] text-[var(--color-wb-text-faint)]">
-          <kbd className="px-1 py-0.5 rounded border border-[var(--color-wb-border-subtle)] bg-[var(--color-wb-bg-inset)] text-[9px] font-mono">
-            Enter
-          </kbd>
-          {" "}to send ·{" "}
-          <kbd className="px-1 py-0.5 rounded border border-[var(--color-wb-border-subtle)] bg-[var(--color-wb-bg-inset)] text-[9px] font-mono">
-            Shift+Enter
-          </kbd>
-          {" "}new line
-        </span>
-        {files.length > 0 && (
-          <span className="text-[10px] text-[var(--color-wb-text-faint)] font-mono tabular-nums">
-            {files.length} {files.length === 1 ? "file" : "files"}
-          </span>
+    <div className={cn("w-full transition-all duration-300", hero ? "max-w-3xl" : "max-w-4xl mx-auto")}>
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+        className={cn(
+          "relative rounded-2xl border transition-all duration-300",
+          "bg-slate-900/80 backdrop-blur-2xl shadow-[0_8px_32px_rgba(0,0,0,0.5)]",
+          dragOver
+            ? "border-cyan-400 bg-cyan-950/30 ring-4 ring-cyan-500/20"
+            : focused
+            ? "border-cyan-500/60 ring-4 ring-cyan-500/15 shadow-[0_0_24px_rgba(6,182,212,0.2)]"
+            : "border-white/10 hover:border-white/20",
         )}
+      >
+        {/* Top bar: Mode Selector with Spring Motion */}
+        <div className="flex items-center justify-between border-b border-white/[0.06] px-3.5 py-2 bg-slate-950/50 rounded-t-2xl">
+          <div className="flex items-center gap-1.5 overflow-x-auto">
+            {MODES.map((m) => {
+              const isActive = mode === m.key;
+              const Icon = m.icon;
+              return (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => setMode(m.key)}
+                  className={cn(
+                    "relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold select-none cursor-pointer transition-colors whitespace-nowrap",
+                    isActive
+                      ? "text-cyan-300"
+                      : "text-slate-400 hover:text-white",
+                  )}
+                >
+                  {isActive && (
+                    <motion.div
+                      layoutId="composer-mode-pill"
+                      transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                      className="absolute inset-0 rounded-xl bg-gradient-to-r from-cyan-950/80 via-slate-900 to-indigo-950/60 border border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.2)]"
+                    />
+                  )}
+                  <Icon
+                    size={13}
+                    className={cn(
+                      "relative z-10 transition-colors",
+                      isActive ? "text-cyan-400" : "text-slate-400",
+                    )}
+                  />
+                  <span className="relative z-10">{m.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="hidden sm:flex items-center gap-1.5 text-[10px] text-slate-400 font-mono">
+            <span>Shift+Enter = newline</span>
+          </div>
+        </div>
+
+        {/* Attachment chips */}
+        <AnimatePresence>
+          {files.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="flex flex-wrap gap-2 px-4 pt-3"
+            >
+              {files.map((file, i) => (
+                <AttachmentChip
+                  key={`${file.name}-${i}`}
+                  file={file}
+                  onRemove={() => removeFile(i)}
+                />
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Text input area */}
+        <div className="px-4 py-3">
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            placeholder={
+              mode === "ask"
+                ? "Ask a question or request assistance from local models..."
+                : mode === "analyze"
+                ? "Attach documents above or ask to analyze specific document insights..."
+                : mode === "knowledge"
+                ? "Search semantic knowledge vectors with source citations..."
+                : "Describe a multi-step engineering or calculation task..."
+            }
+            rows={hero ? 2 : 1}
+            disabled={disabled}
+            className={cn(
+              "w-full resize-none bg-transparent outline-none",
+              "text-white placeholder:text-slate-500",
+              hero ? "text-sm md:text-base leading-relaxed" : "text-sm leading-normal",
+            )}
+          />
+        </div>
+
+        {/* Bottom toolbar */}
+        <div className="flex items-center justify-between px-3.5 pb-3 pt-1">
+          <div className="flex items-center gap-2">
+            {/* File Upload Button */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={acceptStr}
+              onChange={(e) => {
+                if (e.target.files) addFiles(e.target.files);
+                e.target.value = "";
+              }}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled}
+              className={cn(
+                "flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs text-slate-300",
+                "bg-slate-800/60 hover:bg-slate-700/80 hover:text-white border border-white/10 hover:border-cyan-500/30",
+                "transition-all duration-150 cursor-pointer shadow-xs",
+              )}
+              title={`Attach files (${extensions.join(", ")})`}
+            >
+              <Paperclip size={13} className="text-cyan-400" />
+              <span className="text-[11px] font-semibold">Attach Document</span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Send button */}
+            <motion.button
+              whileHover={{ scale: canSend ? 1.05 : 1 }}
+              whileTap={{ scale: canSend ? 0.95 : 1 }}
+              type="button"
+              onClick={handleSend}
+              disabled={!canSend}
+              className={cn(
+                "relative flex h-8 w-8 items-center justify-center rounded-xl transition-all duration-200 cursor-pointer",
+                canSend
+                  ? "bg-gradient-to-r from-cyan-500 via-teal-500 to-indigo-600 text-white shadow-[0_0_16px_rgba(6,182,212,0.4)] border border-cyan-300/40 hover:opacity-95"
+                  : "bg-slate-800 text-slate-500 cursor-not-allowed border border-white/5",
+              )}
+              title="Send prompt (Enter)"
+            >
+              {disabled ? (
+                <Loader2 size={15} className="animate-spin text-white" />
+              ) : (
+                <ArrowUp size={16} strokeWidth={2.4} />
+              )}
+            </motion.button>
+          </div>
+        </div>
       </div>
     </div>
   );

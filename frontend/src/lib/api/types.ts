@@ -400,13 +400,28 @@ export interface ExecuteResponse {
   stdout: string;
   stderr: string;
   exit_code: number;
-  engine: "docker" | "local_fallback";
+  engine: "docker" | "local_fallback" | "unavailable";
+  sandboxed: boolean;
+  security_profile: "full" | "development" | "none";
 }
 
 export interface ExecutionHealth {
   docker_available: boolean;
-  engine: "docker" | "local_fallback";
+  engine: "docker" | "local_fallback" | "unavailable";
   status: string;
+  sandboxed: boolean;
+  security_profile: "full" | "development" | "none";
+  allow_unsandboxed: boolean;
+  restrictions: {
+    network: string;
+    memory: string;
+    cpus: string;
+    pids_limit: number;
+    read_only: boolean;
+    cap_drop: string;
+    no_new_privileges: boolean;
+    max_timeout: number;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -506,4 +521,88 @@ export interface LogStats {
   by_category: Record<string, number>;
   first_record: string | null;
   last_record: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Hardware Telemetry
+// ---------------------------------------------------------------------------
+
+export interface GPUInfo {
+  vendor: "nvidia" | "amd" | "intel" | "none";
+  name: string;
+  vram_mb: number | null;
+  driver_version: string | null;
+  cuda_version: string | null;
+  temperature_c: number | null;
+  utilization_pct: number | null;
+  available: boolean;
+}
+
+export interface CPUInfo {
+  model: string;
+  cores_physical: number;
+  cores_logical: number;
+  architecture: string;
+  frequency_mhz: number | null;
+}
+
+export interface MemoryInfo {
+  total_mb: number;
+  available_mb: number;
+  used_mb: number;
+  percent_used: number;
+}
+
+export interface DiskInfo {
+  path: string;
+  total_gb: number;
+  used_gb: number;
+  free_gb: number;
+  percent_used: number;
+}
+
+export interface HardwareSnapshot {
+  hostname: string;
+  os: string;
+  os_version: string;
+  kernel: string;
+  architecture: string;
+  python_version: string;
+  cpu: CPUInfo;
+  memory: MemoryInfo;
+  gpu: GPUInfo;
+  disk: DiskInfo;
+  inference_capable: boolean;
+  air_gap_safe: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark
+// ---------------------------------------------------------------------------
+
+export interface ChunkingBenchmark {
+  corpus_chars: number;
+  corpus_words: number;
+  chunks_produced: number;
+  chunk_size: number;
+  chunk_overlap: number;
+  total_ms: number;
+  chars_per_second: number;
+  chunks_per_second: number;
+}
+
+export interface EmbeddingBenchmark {
+  provider: string;
+  dimension: number;
+  sample_count: number;
+  total_ms: number;
+  avg_ms_per_embed: number;
+  embeds_per_second: number;
+}
+
+export interface BenchmarkProfile {
+  timestamp: string;
+  chunking: ChunkingBenchmark;
+  embedding: EmbeddingBenchmark;
+  total_benchmark_ms: number;
 }

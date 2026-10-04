@@ -58,3 +58,17 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return false;
   }
 }
+
+export function downloadFile(content: string, filename: string, mimeType = "text/plain;charset=utf-8"): void {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+

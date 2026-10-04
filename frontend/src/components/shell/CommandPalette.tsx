@@ -41,7 +41,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const items: CommandItem[] = [
     {
       id: "nav-workspace",
-      title: "Go to Workspace",
+      title: "Go to AI Workspace",
       category: "Navigation",
       icon: MessageSquare,
       action: () => {
@@ -51,7 +51,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     },
     {
       id: "nav-documents",
-      title: "Go to Documents",
+      title: "Go to Document Intelligence",
       category: "Navigation",
       icon: FileText,
       action: () => {
@@ -61,7 +61,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     },
     {
       id: "nav-knowledge",
-      title: "Go to Knowledge Base",
+      title: "Go to Knowledge RAG Studio",
       category: "Navigation",
       icon: BookOpen,
       action: () => {
@@ -70,8 +70,18 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
       },
     },
     {
+      id: "nav-code",
+      title: "Go to Code Sandbox IDE",
+      category: "Navigation",
+      icon: Code2,
+      action: () => {
+        router.push("/code");
+        onClose();
+      },
+    },
+    {
       id: "nav-models",
-      title: "Go to Models",
+      title: "Go to Model Registry",
       category: "Navigation",
       icon: Cpu,
       action: () => {
@@ -81,7 +91,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     },
     {
       id: "nav-health",
-      title: "Go to System Health",
+      title: "Go to System Health & Telemetry",
       category: "Navigation",
       icon: Activity,
       action: () => {
@@ -90,18 +100,8 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
       },
     },
     {
-      id: "nav-code",
-      title: "Go to Code Sandbox",
-      category: "Navigation",
-      icon: Code2,
-      action: () => {
-        router.push("/code");
-        onClose();
-      },
-    },
-    {
       id: "nav-logs",
-      title: "Go to Audit Logs",
+      title: "Go to Audit Security Ledger",
       category: "Navigation",
       icon: ScrollText,
       action: () => {
@@ -111,7 +111,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     },
     {
       id: "action-upload",
-      title: "Upload New Document",
+      title: "Upload & Ingest Document",
       category: "Actions",
       icon: Upload,
       action: () => {
@@ -121,7 +121,7 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     },
     {
       id: "action-test-model",
-      title: "Test Local Inference",
+      title: "Run Local Inference Test",
       category: "Actions",
       icon: Zap,
       action: () => {
@@ -171,17 +171,20 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-24 px-4 bg-black/40 backdrop-blur-xs animate-fade-in"
+      className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4 bg-black/80 backdrop-blur-md animate-fade-in"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-xl rounded-2xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] shadow-2xl overflow-hidden animate-scale-in"
+        className="relative w-full max-w-xl rounded-2xl border border-cyan-500/30 bg-slate-950/95 backdrop-blur-2xl shadow-[0_0_50px_rgba(0,0,0,0.8)] overflow-hidden animate-scale-in"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
+        {/* Top ambient glow bar */}
+        <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent opacity-90 shadow-[0_0_12px_rgba(6,182,212,0.8)]" />
+
         {/* Search Input */}
-        <div className="flex items-center gap-3 border-b border-[var(--color-wb-border)] px-4 py-3.5">
-          <Search size={16} className="text-[var(--color-wb-text-muted)] shrink-0" />
+        <div className="flex items-center gap-3 border-b border-white/[0.08] px-4 py-3.5 bg-slate-900/60">
+          <Search size={16} className="text-cyan-400 shrink-0" />
           <input
             ref={inputRef}
             type="text"
@@ -190,74 +193,74 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
               setQuery(e.target.value);
               setSelectedIndex(0);
             }}
-            placeholder="Type a command or search workbench..."
-            className="flex-1 bg-transparent text-sm text-[var(--color-wb-text)] placeholder:text-[var(--color-wb-text-muted)] outline-none"
+            placeholder="Type a command or jump to view..."
+            className="flex-1 bg-transparent text-sm text-white placeholder:text-slate-500 outline-none font-medium"
           />
-          <kbd className="rounded bg-[var(--color-wb-bg-inset)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-wb-text-muted)] border border-[var(--color-wb-border-subtle)]">
+          <kbd className="rounded-md bg-slate-800 px-2 py-0.5 font-mono text-[10px] text-slate-400 border border-white/10 shadow-2xs">
             ESC
           </kbd>
         </div>
 
         {/* Results List */}
-        <div className="max-h-72 overflow-y-auto p-2">
+        <div className="max-h-80 overflow-y-auto p-2 space-y-1">
           {filtered.length === 0 ? (
-            <div className="py-8 text-center text-xs text-[var(--color-wb-text-muted)]">
-              No matching commands
+            <div className="py-12 text-center text-xs text-slate-400">
+              No matching commands or views found.
             </div>
           ) : (
-            <div className="space-y-1">
-              {filtered.map((item, idx) => {
-                const Icon = item.icon;
-                const isSelected = idx === selectedIndex;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={item.action}
-                    onMouseEnter={() => setSelectedIndex(idx)}
-                    className={cn(
-                      "flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left transition-colors cursor-pointer",
-                      isSelected
-                        ? "bg-[var(--color-wb-surface-active)] text-[var(--color-wb-text)]"
-                        : "text-[var(--color-wb-text-secondary)] hover:bg-[var(--color-wb-surface-hover)]",
-                    )}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div
-                        className={cn(
-                          "flex h-7 w-7 items-center justify-center rounded-lg",
-                          isSelected
-                            ? "bg-[var(--color-wb-accent-subtle)] text-[var(--color-wb-accent)]"
-                            : "bg-[var(--color-wb-bg-inset)] text-[var(--color-wb-text-muted)]",
-                        )}
-                      >
-                        <Icon size={14} />
-                      </div>
-                      <span className="text-xs font-medium">{item.title}</span>
+            filtered.map((item, idx) => {
+              const Icon = item.icon;
+              const isSelected = idx === selectedIndex;
+              return (
+                <button
+                  key={item.id}
+                  onClick={item.action}
+                  onMouseEnter={() => setSelectedIndex(idx)}
+                  className={cn(
+                    "relative flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-left transition-all duration-150 cursor-pointer select-none",
+                    isSelected
+                      ? "bg-gradient-to-r from-cyan-950/80 to-slate-900 text-white border border-cyan-500/40 shadow-[0_0_15px_rgba(6,182,212,0.15)]"
+                      : "text-slate-300 hover:bg-slate-900/60 border border-transparent",
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={cn(
+                        "flex h-8 w-8 items-center justify-center rounded-xl transition-colors",
+                        isSelected
+                          ? "bg-gradient-to-br from-cyan-500 to-teal-500 text-white shadow-[0_0_10px_rgba(6,182,212,0.4)]"
+                          : "bg-slate-800/80 text-slate-400",
+                      )}
+                    >
+                      <Icon size={15} />
                     </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-[var(--color-wb-text-muted)]">
+                    <div>
+                      <span className="text-xs font-semibold block text-white">{item.title}</span>
+                      <span className="text-[10px] text-slate-400 block font-mono">
                         {item.category}
                       </span>
-                      {isSelected && (
-                        <ArrowRight size={13} className="text-[var(--color-wb-accent)]" />
-                      )}
                     </div>
-                  </button>
-                );
-              })}
-            </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {isSelected && (
+                      <ArrowRight size={14} className="text-cyan-400 animate-pulse" />
+                    )}
+                  </div>
+                </button>
+              );
+            })
           )}
         </div>
 
         {/* Footer shortcuts */}
-        <div className="flex items-center justify-between border-t border-[var(--color-wb-border-subtle)] bg-[var(--color-wb-bg-inset)] px-4 py-2 text-[10px] text-[var(--color-wb-text-muted)]">
-          <div className="flex items-center gap-2">
-            <span>Navigate with <kbd className="font-mono bg-[var(--color-wb-surface)] px-1 py-0.5 rounded border border-[var(--color-wb-border-subtle)]">↑</kbd> <kbd className="font-mono bg-[var(--color-wb-surface)] px-1 py-0.5 rounded border border-[var(--color-wb-border-subtle)]">↓</kbd></span>
+        <div className="flex items-center justify-between border-t border-white/[0.08] bg-slate-950 px-4 py-2.5 text-[10px] text-slate-400">
+          <div className="flex items-center gap-2 font-mono">
+            <span>Use <kbd className="bg-slate-900 px-1.5 py-0.5 rounded border border-white/10 text-slate-300">↑</kbd> <kbd className="bg-slate-900 px-1.5 py-0.5 rounded border border-white/10 text-slate-300">↓</kbd> to navigate</span>
             <span>·</span>
-            <span>Select with <kbd className="font-mono bg-[var(--color-wb-surface)] px-1 py-0.5 rounded border border-[var(--color-wb-border-subtle)]">↵</kbd></span>
+            <span><kbd className="bg-slate-900 px-1.5 py-0.5 rounded border border-white/10 text-slate-300">↵</kbd> to execute</span>
           </div>
-          <span>Sovereign AI Workbench</span>
+          <span className="font-mono text-cyan-400 font-bold tracking-wider">AIR-GAPPED CLI</span>
         </div>
       </div>
     </div>

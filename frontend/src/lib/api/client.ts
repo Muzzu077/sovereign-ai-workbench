@@ -34,6 +34,8 @@ import type {
   ApprovalNoteResult,
   LogsResponse,
   LogStats,
+  HardwareSnapshot,
+  BenchmarkProfile,
 } from "./types";
 
 const BASE_URL =
@@ -184,6 +186,49 @@ export function runAgent(body: AgentRunRequest): Promise<AgentRunResponse> {
   return json<AgentRunResponse>("/agent/run", body);
 }
 
+/**
+ * Stream agent execution trace events via SSE.
+ * Emits events: trace (real-time trace events), result (final result), error.
+ */
+export async function* streamAgent(
+  body: AgentRunRequest,
+): AsyncGenerator<{ event: string; data: string }, void, unknown> {
+  const url = `${BASE_URL}/agent/stream`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok || !res.body) {
+    throw new Error(`Agent stream request failed: ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const lines = part.split("\n");
+      let event = "message";
+      let data = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        else if (line.startsWith("data: ")) data = line.slice(6);
+      }
+      if (data) yield { event, data };
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Models (normalized)
 // ---------------------------------------------------------------------------
@@ -330,6 +375,55 @@ export function downloadApprovalNote(documentId: string): string {
   return `${BASE_URL}/workflows/approval-note/${encodeURIComponent(documentId)}/download`;
 }
 
+/**
+ * Stream the approval workflow pipeline via SSE.
+ * Emits events: stage, citations, findings, note, complete, error.
+ */
+export async function* streamApprovalWorkflow(
+  documentId: string,
+  title?: string,
+  instructions?: string,
+): AsyncGenerator<{ event: string; data: string }, void, unknown> {
+  const form = new FormData();
+  form.append("document_id", documentId);
+  if (title) form.append("title", title);
+  if (instructions) form.append("instructions", instructions);
+
+  const url = `${BASE_URL}/workflows/approval-note/stream`;
+  const res = await fetch(url, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok || !res.body) {
+    throw new Error(`Approval workflow stream failed: ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const lines = part.split("\n");
+      let event = "message";
+      let data = "";
+      for (const line of lines) {
+        if (line.startsWith("event: ")) event = line.slice(7);
+        else if (line.startsWith("data: ")) data = line.slice(6);
+      }
+      if (data) yield { event, data };
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Streaming Chat (SSE)
 // ---------------------------------------------------------------------------
@@ -394,4 +488,20 @@ export function listLogs(params?: {
 
 export function getLogStats(): Promise<LogStats> {
   return request<LogStats>("/logs/stats");
+}
+
+// ---------------------------------------------------------------------------
+// Hardware Telemetry
+// ---------------------------------------------------------------------------
+
+export function getHardware(): Promise<HardwareSnapshot> {
+  return request<HardwareSnapshot>("/hardware");
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark
+// ---------------------------------------------------------------------------
+
+export function runBenchmark(): Promise<BenchmarkProfile> {
+  return request<BenchmarkProfile>("/benchmark", { method: "POST" });
 }

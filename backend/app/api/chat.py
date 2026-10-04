@@ -13,6 +13,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.security.network_monitor import is_loopback_url
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -47,6 +49,15 @@ async def stream_chat(
     # Determine which model endpoint to use
     base_url = settings.llm_base_url
     model_id = settings.llm_model_id
+
+    # Air-gap guard: refuse to stream if the URL is not loopback
+    if not is_loopback_url(base_url):
+        async def _reject() -> AsyncIterator[str]:
+            yield (
+                f"event: error\n"
+                f"data: {json.dumps({'error': 'Air-gap violation: llm_base_url is not a loopback address'})}\n\n"
+            )
+        return StreamingResponse(_reject(), media_type="text/event-stream")
 
     async def event_stream() -> AsyncIterator[str]:
         messages = []

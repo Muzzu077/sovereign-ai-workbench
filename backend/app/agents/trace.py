@@ -25,6 +25,7 @@ never placed in trace metadata.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -63,11 +64,19 @@ class ExecutionTrace:
     Create one ``ExecutionTrace`` per run. Call ``emit()`` to
     record events. After the run, ``events`` contains the full
     ordered trace.
+
+    Optionally pass an ``on_event`` callback to receive events
+    in real time (for SSE streaming).
     """
 
-    def __init__(self, run_id: str | None = None) -> None:
+    def __init__(
+        self,
+        run_id: str | None = None,
+        on_event: Callable[[TraceEvent], None] | None = None,
+    ) -> None:
         self.run_id = run_id or str(uuid.uuid4())
         self.events: list[TraceEvent] = []
+        self._on_event = on_event
 
     def emit(
         self,
@@ -92,6 +101,8 @@ class ExecutionTrace:
             metadata=metadata or {},
         )
         self.events.append(event)
+        if self._on_event is not None:
+            self._on_event(event)
         return event
 
     def to_dicts(self) -> list[dict[str, Any]]:

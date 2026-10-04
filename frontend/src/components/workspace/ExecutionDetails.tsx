@@ -7,7 +7,7 @@ import { ChevronRight, AlertTriangle, Cpu, Clock, Layers, Zap } from "lucide-rea
 
 interface ExecutionDetailsProps {
   model: string;
-  provider: string;
+  provider?: string;
   evidenceQuality?: EvidenceQuality;
   retrievalTime?: number;
   generationTime?: number;
@@ -25,7 +25,7 @@ interface DetailRow {
 
 export default function ExecutionDetails({
   model,
-  provider,
+  provider = "llama_cpp",
   retrievalTime,
   generationTime,
   totalTime,

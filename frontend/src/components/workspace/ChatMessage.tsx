@@ -9,7 +9,20 @@ import type {
   PlanStepItem,
   ToolCallItem,
 } from "@/lib/api/types";
-import { Copy, Check, ChevronRight, User2, Download } from "lucide-react";
+import {
+  Copy,
+  Check,
+  ChevronRight,
+  User2,
+  Download,
+  Sparkles,
+  Bot,
+  Zap,
+  Code2,
+  FileText,
+  ExternalLink,
+  ShieldCheck,
+} from "lucide-react";
 import { exportToDocx } from "@/lib/api/client";
 import EvidenceBadge from "./EvidenceBadge";
 import SourceCitation from "./SourceCitation";
@@ -34,7 +47,59 @@ interface ChatMessageProps {
   verification?: Record<string, unknown>;
   attachments?: { name: string; type: string; size: number }[];
   timestamp?: string;
+  onSelectCitation?: (citation: Citation) => void;
+  onFollowUp?: (prompt: string) => void;
 }
+
+// ── Code Block Component with Copy ─────────────────────────────────────────
+
+function CodeBlock({ code, language }: { code: string; language: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(code);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  return (
+    <div className="my-3 rounded-xl border border-stone-800 bg-[#121110] text-stone-100 overflow-hidden shadow-sm">
+      {/* Code Header */}
+      <div className="flex items-center justify-between px-3.5 py-2 border-b border-stone-800/80 bg-stone-900/60 text-xs font-mono">
+        <div className="flex items-center gap-2">
+          <Code2 size={13} className="text-teal-400" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-stone-300">
+            {language || "code"}
+          </span>
+        </div>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-white px-2 py-0.5 rounded hover:bg-white/5 transition-colors"
+        >
+          {copied ? (
+            <>
+              <Check size={12} className="text-emerald-400" />
+              <span className="text-emerald-400">Copied</span>
+            </>
+          ) : (
+            <>
+              <Copy size={12} />
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      {/* Code Body */}
+      <div className="p-4 font-mono text-[12px] leading-relaxed overflow-x-auto select-text text-stone-200">
+        <code>{code}</code>
+      </div>
+    </div>
+  );
+}
+
+// ── Markdown Content Renderer ──────────────────────────────────────────────
 
 function renderContent(content: string) {
   const paragraphs = content.split(/\n{2,}/);
@@ -42,84 +107,65 @@ function renderContent(content: string) {
   return paragraphs.map((paragraph, pIdx) => {
     const trimmed = paragraph.trim();
 
-    // Heading detection (## Heading or **Heading**)
+    // Headings
+    if (trimmed.startsWith("### ")) {
+      return (
+        <h4 key={pIdx} className="text-xs font-bold uppercase tracking-wider text-[var(--color-wb-text)] mt-4 mb-1.5 first:mt-0">
+          {trimmed.slice(4)}
+        </h4>
+      );
+    }
     if (trimmed.startsWith("## ")) {
       return (
-        <h3 key={pIdx} className="text-[13px] font-semibold text-[var(--color-wb-text)] mt-4 mb-1.5 first:mt-0">
+        <h3 key={pIdx} className="text-sm font-bold text-[var(--color-wb-text)] mt-4 mb-2 first:mt-0 flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full bg-teal-600 inline-block" />
           {trimmed.slice(3)}
         </h3>
       );
     }
     if (trimmed.startsWith("# ")) {
       return (
-        <h2 key={pIdx} className="text-sm font-bold text-[var(--color-wb-text)] mt-4 mb-1.5 first:mt-0">
+        <h2 key={pIdx} className="text-base font-bold text-[var(--color-wb-text)] mt-5 mb-2.5 first:mt-0">
           {trimmed.slice(2)}
         </h2>
       );
     }
 
+    // Code blocks
+    if (trimmed.startsWith("```")) {
+      const match = trimmed.match(/^```(\w+)?\n?([\s\S]*?)\n?```$/);
+      const language = match ? match[1] || "" : "";
+      const code = match ? match[2] : trimmed.replace(/^```\w*\n?/, "").replace(/\n?```$/, "");
+      return <CodeBlock key={pIdx} code={code} language={language} />;
+    }
+
     // Bullet list detection
     const lines = paragraph.split(/\n/);
     const isBulletList = lines.every(
-      (l) => l.trim().startsWith("- ") || l.trim().startsWith("* ") || l.trim().startsWith("• ") || l.trim() === ""
+      (l) => l.trim().startsWith("- ") || l.trim().startsWith("* ") || l.trim().startsWith("• ") || l.trim() === "",
     );
 
     if (isBulletList && lines.some((l) => l.trim().length > 0)) {
       return (
-        <ul key={pIdx} className="space-y-1 my-2">
+        <ul key={pIdx} className="space-y-1.5 my-2.5">
           {lines
             .filter((l) => l.trim().length > 0)
             .map((line, lIdx) => (
               <li
                 key={lIdx}
-                className="flex items-start gap-2 text-[13px] leading-relaxed text-[var(--color-wb-text-secondary)]"
+                className="flex items-start gap-2.5 text-xs leading-relaxed text-[var(--color-wb-text-secondary)]"
               >
-                <span className="mt-2 h-1 w-1 rounded-full bg-[var(--color-wb-text-faint)] shrink-0" />
-                <span>{formatInlineText(line.replace(/^[\-\*\•]\s+/, ""))}</span>
+                <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-teal-600/70 shrink-0" />
+                <div>{formatInlineText(line.replace(/^[\-\*\•]\s+/, ""))}</div>
               </li>
             ))}
         </ul>
       );
     }
 
-    // Numbered list detection
-    const isNumberedList = lines.every(
-      (l) => /^\d+[\.\)]\s/.test(l.trim()) || l.trim() === ""
-    );
-
-    if (isNumberedList && lines.some((l) => l.trim().length > 0)) {
-      return (
-        <ol key={pIdx} className="space-y-1 my-2 list-decimal list-inside">
-          {lines
-            .filter((l) => l.trim().length > 0)
-            .map((line, lIdx) => (
-              <li
-                key={lIdx}
-                className="text-[13px] leading-relaxed text-[var(--color-wb-text-secondary)]"
-              >
-                {formatInlineText(line.replace(/^\d+[\.\)]\s+/, ""))}
-              </li>
-            ))}
-        </ol>
-      );
-    }
-
-    // Code block detection
-    if (trimmed.startsWith("```")) {
-      const codeContent = trimmed.replace(/^```\w*\n?/, "").replace(/\n?```$/, "");
-      return (
-        <pre
-          key={pIdx}
-          className="my-2 rounded-md bg-[var(--color-wb-sidebar)] text-[var(--color-wb-text-inverse)] px-3.5 py-3 text-[12px] font-mono leading-relaxed overflow-x-auto"
-        >
-          <code>{codeContent}</code>
-        </pre>
-      );
-    }
-
     // Regular paragraph
     return (
-      <p key={pIdx} className="text-[13px] leading-[1.7] text-[var(--color-wb-text-secondary)] mb-2 last:mb-0">
+      <p key={pIdx} className="text-xs leading-[1.75] text-[var(--color-wb-text-secondary)] mb-2.5 last:mb-0">
         {lines.map((line, lIdx) => (
           <React.Fragment key={lIdx}>
             {lIdx > 0 && <br />}
@@ -132,15 +178,12 @@ function renderContent(content: string) {
 }
 
 function formatInlineText(text: string): React.ReactNode {
-  // Handle **bold** and `code` inline formatting
   const parts: React.ReactNode[] = [];
   let remaining = text;
   let key = 0;
 
   while (remaining.length > 0) {
-    // Bold
     const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
-    // Inline code
     const codeMatch = remaining.match(/`([^`]+)`/);
 
     const boldIdx = boldMatch?.index ?? Infinity;
@@ -156,7 +199,7 @@ function formatInlineText(text: string): React.ReactNode {
       parts.push(
         <strong key={key++} className="font-semibold text-[var(--color-wb-text)]">
           {boldMatch[1]}
-        </strong>
+        </strong>,
       );
       remaining = remaining.slice(boldIdx + boldMatch[0].length);
     } else if (codeMatch) {
@@ -164,16 +207,46 @@ function formatInlineText(text: string): React.ReactNode {
       parts.push(
         <code
           key={key++}
-          className="px-1 py-0.5 rounded bg-[var(--color-wb-bg-inset)] text-[var(--color-wb-text)] text-[12px] font-mono"
+          className="px-1.5 py-0.5 rounded-md bg-[var(--color-wb-bg-inset)] border border-[var(--color-wb-border)] text-teal-800 dark:text-teal-300 text-[11px] font-mono font-medium"
         >
           {codeMatch[1]}
-        </code>
+        </code>,
       );
       remaining = remaining.slice(codeIdx + codeMatch[0].length);
     }
   }
 
   return parts.length === 1 && typeof parts[0] === "string" ? parts[0] : <>{parts}</>;
+}
+
+// ── Smart Follow-up Suggestions Generator ──────────────────────────────────
+
+function getSuggestionsForContent(content: string): string[] {
+  const lower = content.toLowerCase();
+  if (lower.includes("risk") || lower.includes("finding")) {
+    return [
+      "Draft executive summary of findings",
+      "Suggest mitigation strategies for these risks",
+      "Export as structured compliance note",
+    ];
+  }
+  if (lower.includes("code") || lower.includes("def ") || lower.includes("import ")) {
+    return [
+      "Write unit tests for this code",
+      "Explain time & space complexity",
+      "Execute inside sandboxed container",
+    ];
+  }
+  if (lower.includes("procedure") || lower.includes("step")) {
+    return [
+      "Provide step-by-step checklist",
+      "Check against safety protocols",
+    ];
+  }
+  return [
+    "Elaborate in deeper detail",
+    "Summarize into key takeaways",
+  ];
 }
 
 export default function ChatMessage({
@@ -191,9 +264,12 @@ export default function ChatMessage({
   trace,
   attachments,
   timestamp,
+  onSelectCitation,
+  onFollowUp,
 }: ChatMessageProps) {
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const isUser = role === "user";
 
   const handleCopy = async () => {
@@ -206,57 +282,55 @@ export default function ChatMessage({
 
   const handleExportDocx = async () => {
     try {
+      setExporting(true);
       const blob = await exportToDocx({
-        title: "Sovereign AI Response",
+        title: "Sovereign AI Executive Response",
         content,
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "sovereign_response.docx";
+      a.download = `sovereign_response_${Date.now()}.docx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch {
-      // Silent fail — export is best-effort
+      // Best effort
+    } finally {
+      setExporting(false);
     }
   };
 
-  // ── User message ──────────────────────────────────────────────────────
+  // ── User message bubble ──────────────────────────────────────────────────
   if (isUser) {
     return (
-      <div className="flex flex-col items-end gap-1.5">
-        {/* Timestamp */}
-        {timestamp && (
-          <span className="text-[10px] text-[var(--color-wb-text-faint)] font-mono tabular-nums mr-1">
-            {formatRelativeTime(timestamp)}
-          </span>
-        )}
-
-        {/* Message bubble */}
-        <div
-          className={cn(
-            "rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[75%]",
-            "bg-[var(--color-wb-sidebar)] text-[var(--color-wb-text-inverse)]",
-            "text-[13px] leading-relaxed",
+      <div className="flex flex-col items-end gap-1.5 max-w-2xl ml-auto">
+        <div className="flex items-center gap-2 mr-1">
+          {timestamp && (
+            <span className="text-[10px] text-[var(--color-wb-text-faint)] font-mono tabular-nums">
+              {formatRelativeTime(timestamp)}
+            </span>
           )}
-        >
+          <span className="text-[11px] font-semibold text-[var(--color-wb-text-muted)]">
+            You
+          </span>
+        </div>
+
+        <div className="rounded-2xl rounded-tr-xs px-4 py-3 bg-[var(--color-wb-sidebar)] text-white text-xs leading-relaxed shadow-sm border border-stone-800">
           {content}
         </div>
 
-        {/* Attachments */}
+        {/* Attachment chips */}
         {attachments && attachments.length > 0 && (
-          <div className="flex flex-wrap gap-1 justify-end">
+          <div className="flex flex-wrap gap-1.5 justify-end mt-1">
             {attachments.map((att, idx) => (
               <span
                 key={idx}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] bg-[var(--color-wb-bg-inset)] border border-[var(--color-wb-border-subtle)] text-[var(--color-wb-text-muted)]"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] bg-[var(--color-wb-surface)] border border-[var(--color-wb-border)] text-[var(--color-wb-text-secondary)] shadow-2xs font-mono"
               >
-                <span className="font-mono uppercase font-semibold text-[9px]">
-                  {att.type}
-                </span>
-                <span className="truncate max-w-[120px]">{att.name}</span>
+                <FileText size={11} className="text-teal-600" />
+                <span className="truncate max-w-[140px] font-medium">{att.name}</span>
               </span>
             ))}
           </div>
@@ -265,73 +339,73 @@ export default function ChatMessage({
     );
   }
 
-  // ── Assistant message ─────────────────────────────────────────────────
+  // ── Assistant message ────────────────────────────────────────────────────
   const hasCitations = citations && citations.length > 0;
   const hasTrace = trace && trace.length > 0;
-  const hasExecDetails = model && provider;
+  const suggestions = getSuggestionsForContent(content);
 
   return (
-    <div className="flex gap-3 max-w-full">
+    <div className="flex gap-3 max-w-full group">
       {/* Avatar column */}
-      <div className="shrink-0 mt-0.5">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--color-wb-accent-subtle)] border border-[var(--color-wb-accent-muted)]">
-          <span className="text-[10px] font-bold text-[var(--color-wb-accent)]">AI</span>
+      <div className="shrink-0 mt-1">
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-teal-600 to-teal-800 border border-teal-400/30 text-white shadow-[0_0_12px_rgba(15,118,110,0.2)]">
+          <Sparkles size={15} />
         </div>
       </div>
 
       {/* Content column */}
       <div className="flex-1 min-w-0 space-y-3">
-        {/* Header */}
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] font-semibold text-[var(--color-wb-text)]">
-            Sovereign AI
-          </span>
-          {timestamp && (
-            <span className="text-[10px] text-[var(--color-wb-text-faint)] font-mono tabular-nums">
-              {formatRelativeTime(timestamp)}
+        {/* Header Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-wb-border-subtle)] pb-1.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-[var(--color-wb-text)]">
+              Sovereign Core
             </span>
-          )}
+            {model && (
+              <span className="text-[10px] font-mono px-2 py-0.2 rounded bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/20 font-semibold">
+                {model === "general" ? "Gemma 3 4B" : model}
+              </span>
+            )}
+            {totalTime && (
+              <span className="text-[10px] font-mono text-[var(--color-wb-text-muted)] flex items-center gap-0.5">
+                <Zap size={10} className="text-teal-600" />
+                {(totalTime / 1000).toFixed(2)}s
+              </span>
+            )}
+          </div>
 
-          {/* Copy action */}
-          <button
-            onClick={handleCopy}
-            className={cn(
-              "ml-auto p-1 rounded-md wb-interactive",
-              "text-[var(--color-wb-text-faint)]",
-              "opacity-0 group-hover:opacity-100 hover:opacity-100",
-              "hover:text-[var(--color-wb-text)] hover:bg-[var(--color-wb-surface-hover)]",
+          <div className="flex items-center gap-1.5">
+            {timestamp && (
+              <span className="text-[10px] text-[var(--color-wb-text-faint)] font-mono tabular-nums mr-1">
+                {formatRelativeTime(timestamp)}
+              </span>
             )}
-            aria-label="Copy response"
-          >
-            {copied ? (
-              <Check size={13} className="text-[var(--color-wb-success)]" />
-            ) : (
-              <Copy size={13} />
-            )}
-          </button>
 
-          {/* Export DOCX action */}
-          <button
-            onClick={handleExportDocx}
-            className={cn(
-              "p-1 rounded-md wb-interactive",
-              "text-[var(--color-wb-text-faint)]",
-              "opacity-0 group-hover:opacity-100 hover:opacity-100",
-              "hover:text-[var(--color-wb-text)] hover:bg-[var(--color-wb-surface-hover)]",
-            )}
-            aria-label="Export as DOCX"
-            title="Export as DOCX"
-          >
-            <Download size={13} />
-          </button>
+            <button
+              onClick={handleCopy}
+              className="p-1.5 rounded-lg text-[var(--color-wb-text-muted)] hover:text-[var(--color-wb-text)] hover:bg-[var(--color-wb-surface-hover)] border border-transparent hover:border-[var(--color-wb-border)] transition-colors cursor-pointer"
+              title="Copy response"
+            >
+              {copied ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+            </button>
+
+            <button
+              onClick={handleExportDocx}
+              disabled={exporting}
+              className="p-1.5 rounded-lg text-[var(--color-wb-text-muted)] hover:text-[var(--color-wb-text)] hover:bg-[var(--color-wb-surface-hover)] border border-transparent hover:border-[var(--color-wb-border)] transition-colors cursor-pointer"
+              title="Export as Microsoft Word (.docx)"
+            >
+              <Download size={13} />
+            </button>
+          </div>
         </div>
 
-        {/* Main content */}
+        {/* Markdown Rendered Content */}
         <div className="prose-workbench">
           {renderContent(content)}
         </div>
 
-        {/* Evidence badge */}
+        {/* Evidence Quality Badge */}
         {evidenceQuality && (
           <EvidenceBadge
             quality={evidenceQuality}
@@ -340,22 +414,28 @@ export default function ChatMessage({
           />
         )}
 
-        {/* Citations */}
+        {/* Citations Grid */}
         {hasCitations && (
-          <div className="space-y-1.5">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-wb-text-faint)]">
-              Sources
+          <div className="space-y-2 pt-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--color-wb-text-muted)] block">
+              Grounded Sources ({citations.length})
             </span>
-            <div className="grid gap-1.5">
+            <div className="grid gap-2 sm:grid-cols-2">
               {citations.map((c, idx) => (
-                <SourceCitation key={c.chunk_id ?? idx} citation={c} />
+                <div
+                  key={c.chunk_id ?? idx}
+                  onClick={() => onSelectCitation?.(c)}
+                  className="cursor-pointer"
+                >
+                  <SourceCitation citation={c} />
+                </div>
               ))}
             </div>
           </div>
         )}
 
         {/* Execution details */}
-        {hasExecDetails && (
+        {model && (
           <ExecutionDetails
             model={model}
             provider={provider}
@@ -369,38 +449,45 @@ export default function ChatMessage({
 
         {/* Execution timeline */}
         {hasTrace && (
-          <div className="rounded-lg border border-[var(--color-wb-border)] overflow-hidden">
+          <div className="rounded-xl border border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] overflow-hidden shadow-2xs">
             <button
               type="button"
               onClick={() => setTimelineOpen((v) => !v)}
-              className={cn(
-                "flex items-center gap-2 w-full px-3 py-2 text-left wb-interactive",
-                "text-xs text-[var(--color-wb-text-secondary)]",
-                "hover:bg-[var(--color-wb-surface-hover)]",
-                "select-none",
-              )}
-              aria-expanded={timelineOpen}
+              className="flex items-center gap-2 w-full px-3.5 py-2.5 text-left text-xs font-semibold text-[var(--color-wb-text)] hover:bg-[var(--color-wb-surface-hover)] transition-colors cursor-pointer select-none"
             >
               <ChevronRight
-                size={13}
-                className={cn(
-                  "shrink-0 text-[var(--color-wb-text-faint)] wb-interactive",
-                  timelineOpen && "rotate-90",
-                )}
+                size={14}
+                className={cn("text-[var(--color-wb-text-muted)] transition-transform", timelineOpen && "rotate-90")}
               />
-              <span className="text-[11px] font-semibold text-[var(--color-wb-text-secondary)]">
-                Execution Timeline
-              </span>
-              <span className="ml-auto text-[10px] text-[var(--color-wb-text-faint)] font-mono tabular-nums">
-                {trace.length} steps
+              <span>Agent Execution Pipeline</span>
+              <span className="ml-auto text-[10px] font-mono text-teal-600 bg-teal-500/10 px-2 py-0.5 rounded-full border border-teal-500/20">
+                {trace.length} operations verified
               </span>
             </button>
 
             {timelineOpen && (
-              <div className="border-t border-[var(--color-wb-border)] px-3 py-3 bg-[var(--color-wb-bg-inset)] animate-slide-up">
+              <div className="border-t border-[var(--color-wb-border)] p-4 bg-[var(--color-wb-bg-inset)]/40">
                 <ExecutionTimeline trace={trace} />
               </div>
             )}
+          </div>
+        )}
+
+        {/* Smart Follow-up Suggestions */}
+        {onFollowUp && suggestions.length > 0 && (
+          <div className="pt-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] uppercase font-bold text-[var(--color-wb-text-muted)] mr-1">
+              Suggested:
+            </span>
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                onClick={() => onFollowUp(s)}
+                className="text-left text-[11px] px-2.5 py-1 rounded-lg bg-[var(--color-wb-surface)] hover:bg-teal-500/10 border border-[var(--color-wb-border)] hover:border-teal-500/30 text-[var(--color-wb-text-secondary)] hover:text-teal-700 transition-colors cursor-pointer shadow-2xs"
+              >
+                {s}
+              </button>
+            ))}
           </div>
         )}
       </div>

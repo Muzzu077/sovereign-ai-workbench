@@ -29,6 +29,10 @@ from app.security.network_monitor import NetworkMonitor
 from app.tools.registry import ToolRegistry
 from app.tools.calculator import CalculatorTool
 from app.tools.file_reader import FileReaderTool
+from app.tools.ocr_tool import OCRTool
+from app.tools.document_tool import DocumentGenerationTool
+from app.tools.file_tool import FileManagementTool
+from app.tools.code_tool import CodeExecutionTool
 from app.agents.verifier import VerifierRegistry, CalculatorVerifier
 from app.agents.orchestrator import AgentOrchestrator
 from app.documents.processor import ProcessorRegistry
@@ -59,6 +63,8 @@ from app.api import chat as chat_api
 from app.api import logs as logs_api
 from app.services.export_service import ExportService
 from app.services.approval_workflow import ApprovalWorkflowService
+from app.services.hardware import HardwareDetector
+from app.services.benchmark import BenchmarkRunner
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +105,22 @@ def _build_tool_registry(settings) -> ToolRegistry:
     workspace.mkdir(parents=True, exist_ok=True)
     tool_registry.register(FileReaderTool(workspace_root=workspace))
 
+    # File manager — read/write/list/info operations within workspace.
+    tool_registry.register(FileManagementTool(workspace_root=workspace))
+
+    # OCR — local Tesseract-based OCR for scanned PDFs.
+    tool_registry.register(OCRTool(
+        workspace_root=settings.upload_dir,
+    ))
+
+    # Document generator — markdown to DOCX conversion.
+    tool_registry.register(DocumentGenerationTool(
+        outputs_dir=settings.outputs_dir,
+    ))
+
+    # Code execution — sandboxed Python execution via Docker.
+    tool_registry.register(CodeExecutionTool())
+
     return tool_registry
 
 
@@ -135,10 +157,9 @@ def create_app() -> FastAPI:
     )
     network_monitor = NetworkMonitor(
         configured_endpoints={
-            "llm_server": str(settings.llm_base_url),
+            **({"llm_server": str(settings.llm_base_url)} if settings.llm_enabled else {}),
+            "coder_server": str(settings.coder_base_url),
         }
-        if settings.llm_enabled
-        else {}
     )
 
     # Knowledge subsystem components with persistence
@@ -348,6 +369,31 @@ def create_app() -> FastAPI:
                 "embeddings": embedding_health,
             },
         }
+
+    @app.get("/hardware", tags=["root"])
+    def hardware_telemetry() -> dict[str, object]:
+        """Hardware detection and telemetry endpoint.
+
+        Returns comprehensive hardware information including CPU, GPU,
+        memory, disk, and inference capability assessment.
+        """
+        detector = HardwareDetector(data_dir=settings.data_dir)
+        snapshot = detector.detect()
+        return snapshot.model_dump()
+
+    @app.post("/benchmark", tags=["root"])
+    def run_benchmark() -> dict[str, object]:
+        """Run offline benchmarks on chunking and embedding subsystems.
+
+        Returns throughput/latency metrics for the local inference
+        pipeline components. Does NOT require a running LLM server.
+        """
+        runner = BenchmarkRunner(
+            chunking_service=chunking_service,
+            embedding_provider=embedding_provider,
+        )
+        profile = runner.run_all()
+        return profile.model_dump()
 
     # --- Route groups ---
     app.include_router(agent_api.router)
