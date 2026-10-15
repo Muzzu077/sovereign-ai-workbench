@@ -4,414 +4,260 @@ import React, { useState, useEffect, useCallback } from "react";
 import AppShell from "@/components/shell/AppShell";
 import { listLogs, getLogStats } from "@/lib/api/client";
 import type { LogEntry, LogStats } from "@/lib/api/types";
-import { cn } from "@/lib/utils";
+import { formatRelativeTime } from "@/lib/utils";
 import {
-  Activity,
-  Bot,
-  BookOpen,
-  FileText,
-  Code2,
-  Download,
-  Shield,
-  Settings,
+  Clipboard,
+  RefreshCw,
+  Loader2,
   ChevronLeft,
   ChevronRight,
-  RefreshCw,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  Loader2,
-  Clock,
-  BarChart3,
-  ShieldCheck,
-  Search,
+  AlertCircle,
 } from "lucide-react";
-import { SpotlightCard } from "@/components/ui/SpotlightCard";
-import { BackgroundGrid } from "@/components/ui/BackgroundGrid";
-import { CountUp } from "@/components/ui/CountUp";
-import { ShimmerButton } from "@/components/ui/ShimmerButton";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 
-// ── Category config ────────────────────────────────────────────────────────
-
-const CATEGORY_META: Record<
-  string,
-  { label: string; icon: React.ReactNode; color: string }
-> = {
-  agent: {
-    label: "Agent",
-    icon: <Bot size={13} />,
-    color: "text-purple-300 bg-purple-500/15 border-purple-500/30",
-  },
-  knowledge: {
-    label: "Knowledge",
-    icon: <BookOpen size={13} />,
-    color: "text-blue-300 bg-blue-500/15 border-blue-500/30",
-  },
-  workflow: {
-    label: "Workflow",
-    icon: <Settings size={13} />,
-    color: "text-amber-300 bg-amber-500/15 border-amber-500/30",
-  },
-  document: {
-    label: "Document",
-    icon: <FileText size={13} />,
-    color: "text-cyan-300 bg-cyan-500/15 border-cyan-500/30",
-  },
-  execution: {
-    label: "Execution",
-    icon: <Code2 size={13} />,
-    color: "text-emerald-300 bg-emerald-500/15 border-emerald-500/30",
-  },
-  codegen: {
-    label: "CodeGen",
-    icon: <Code2 size={13} />,
-    color: "text-teal-300 bg-teal-500/15 border-teal-500/30",
-  },
-  export: {
-    label: "Export",
-    icon: <Download size={13} />,
-    color: "text-indigo-300 bg-indigo-500/15 border-indigo-500/30",
-  },
-  model: {
-    label: "Model",
-    icon: <Settings size={13} />,
-    color: "text-slate-300 bg-slate-500/15 border-slate-500/30",
-  },
-  system: {
-    label: "System",
-    icon: <Shield size={13} />,
-    color: "text-rose-300 bg-rose-500/15 border-rose-500/30",
-  },
-};
-
-const PAGE_SIZE = 25;
+function EmptyState({ icon: Icon, title, description }: { icon: typeof Clipboard; title: string; description: string }) {
+  return (
+    <div className="flex min-h-[310px] flex-col items-center justify-center border border-dashed border-border bg-panel/35 px-6 py-10 text-center">
+      <div className="mb-5 grid size-12 place-items-center rounded-md border border-border bg-panel text-primary">
+        <Icon className="size-5" strokeWidth={1.6} />
+      </div>
+      <h3 className="text-base font-semibold">{title}</h3>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{description}</p>
+    </div>
+  );
+}
 
 export default function LogsPage() {
-  const [entries, setEntries] = useState<LogEntry[]>([]);
-  const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [stats, setStats] = useState<LogStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Filters
-  const [statusFilter, setStatusFilter] = useState<string>("");
   const [categoryFilter, setCategoryFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const [offset, setOffset] = useState(0);
+  const limit = 20;
 
   const fetchLogs = useCallback(async () => {
-    setLoading(true);
     try {
+      setLoading(true);
+      setError(null);
       const res = await listLogs({
-        limit: PAGE_SIZE,
+        limit,
         offset,
-        status: statusFilter || undefined,
         category: categoryFilter || undefined,
+        status: statusFilter || undefined,
       });
-      setEntries(res.entries);
-      setTotal(res.total);
+      setLogs(res.entries);
     } catch (err) {
-      console.error("Failed to fetch logs:", err);
-      setEntries([]);
-      setTotal(0);
+      setError(err instanceof Error ? err.message : "Failed to load audit logs");
     } finally {
       setLoading(false);
     }
-  }, [offset, statusFilter, categoryFilter]);
+  }, [categoryFilter, statusFilter, offset]);
 
   const fetchStats = useCallback(async () => {
     try {
-      const s = await getLogStats();
-      setStats(s);
+      const data = await getLogStats();
+      setStats(data);
     } catch {
-      setStats(null);
+      // Non-critical
     }
   }, []);
 
   useEffect(() => {
     fetchLogs();
-  }, [fetchLogs]);
-
-  useEffect(() => {
     fetchStats();
-  }, [fetchStats]);
+  }, [fetchLogs, fetchStats]);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
-
-  const goPage = (page: number) => {
-    const p = Math.max(1, Math.min(page, totalPages));
-    setOffset((p - 1) * PAGE_SIZE);
+  const handleNextPage = () => {
+    if (stats && offset + limit < stats.total_records) {
+      setOffset((prev) => prev + limit);
+    }
   };
 
-  const formatTime = (iso: string) => {
-    try {
-      const d = new Date(iso);
-      return d.toLocaleString("en-IN", {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      });
-    } catch {
-      return iso;
+  const handlePrevPage = () => {
+    if (offset > 0) {
+      setOffset((prev) => Math.max(0, prev - limit));
     }
   };
 
   return (
     <AppShell>
-      <div className="relative flex flex-col h-full bg-[#070a12]">
-        <BackgroundGrid variant="dots" opacity={0.04} />
-
-        {/* ── Top Header & Stats ─────────────────────────────────────── */}
-        <div className="relative z-10 p-6 border-b border-white/[0.08] bg-slate-950/70 backdrop-blur-xl space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h1 className="text-base font-bold text-white flex items-center gap-2">
-                <ShieldCheck size={18} className="text-cyan-400" />
-                <span>Audit & Security Ledger</span>
-              </h1>
-              <p className="mt-0.5 text-xs text-slate-400">
-                Cryptographically verifiable event trails for air-gapped compliance.
-              </p>
+      <main className="mx-auto max-w-[1420px] px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
+        {/* Header */}
+        <div className="mb-8 flex flex-wrap items-start justify-between gap-5">
+          <div>
+            <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.15em] text-primary">
+              <Clipboard className="size-3.5" /> GOVERNANCE / 06
             </div>
-
-            <ShimmerButton
-              onClick={() => {
-                fetchLogs();
-                fetchStats();
-              }}
-              loading={loading}
-              variant="secondary"
-              size="sm"
-            >
-              <RefreshCw size={13} className={cn(loading && "animate-spin-smooth")} />
-              <span>Refresh Ledger</span>
-            </ShimmerButton>
-          </div>
-
-          {/* Quick Metrics Bar */}
-          {stats && stats.total_records > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
-              <SpotlightCard className="p-3" spotlightColor="rgba(6, 182, 212, 0.12)">
-                <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-                  Total Events
-                </span>
-                <span className="text-lg font-extrabold text-white font-mono">
-                  <CountUp value={stats.total_records} duration={0.8} />
-                </span>
-              </SpotlightCard>
-
-              <SpotlightCard className="p-3" spotlightColor="rgba(16, 185, 129, 0.12)">
-                <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-                  Success Records
-                </span>
-                <span className="text-lg font-extrabold text-emerald-400 font-mono">
-                  <CountUp value={stats.by_status["success"] || stats.by_status["completed"] || 0} duration={0.8} />
-                </span>
-              </SpotlightCard>
-
-              <SpotlightCard className="p-3" spotlightColor="rgba(245, 158, 11, 0.12)">
-                <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-                  Active Categories
-                </span>
-                <span className="text-lg font-extrabold text-white font-mono">
-                  {Object.keys(stats.by_category).length}
-                </span>
-              </SpotlightCard>
-
-              <SpotlightCard className="p-3" spotlightColor="rgba(99, 102, 241, 0.12)">
-                <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">
-                  Storage Mode
-                </span>
-                <span className="text-xs font-bold text-cyan-400 font-mono mt-1 block">
-                  WAL SQLite (Local)
-                </span>
-              </SpotlightCard>
-            </div>
-          )}
-
-          {/* Filter Chips */}
-          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/[0.06]">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mr-1">
-              Filter:
-            </span>
-
-            {/* Status All */}
-            <button
-              onClick={() => {
-                setStatusFilter("");
-                setCategoryFilter("");
-                setOffset(0);
-              }}
-              className={cn(
-                "px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer border",
-                !statusFilter && !categoryFilter
-                  ? "bg-gradient-to-r from-cyan-500 to-teal-500 text-white border-cyan-400/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]"
-                  : "bg-slate-900/80 text-slate-300 border-white/10 hover:bg-slate-800 hover:border-cyan-500/30",
-              )}
-            >
-              All Events
-            </button>
-
-            {/* Category chips */}
-            {stats &&
-              Object.entries(stats.by_category).map(([cat, count]) => {
-                const meta = CATEGORY_META[cat] ?? CATEGORY_META.system;
-                const isSelected = categoryFilter === cat;
-                return (
-                  <button
-                    key={cat}
-                    onClick={() => {
-                      setCategoryFilter(isSelected ? "" : cat);
-                      setOffset(0);
-                    }}
-                    className={cn(
-                      "flex items-center gap-1.5 text-xs px-3 py-1 rounded-xl font-medium transition-all cursor-pointer border",
-                      isSelected
-                        ? "bg-gradient-to-r from-cyan-500 to-teal-500 text-white border-cyan-400/40 shadow-[0_0_12px_rgba(6,182,212,0.25)]"
-                        : "bg-slate-900/80 text-slate-300 border-white/10 hover:bg-slate-800 hover:border-cyan-500/30",
-                    )}
-                  >
-                    {meta.icon}
-                    <span>{meta.label}</span>
-                    <span className="text-[10px] opacity-75 font-mono">({count})</span>
-                  </button>
-                );
-              })}
-          </div>
-        </div>
-
-        {/* ── Event Ledger Table ─────────────────────────────────────── */}
-        <div className="relative z-10 flex-1 overflow-y-auto">
-          {loading && entries.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2">
-              <Loader2 size={22} className="animate-spin-smooth text-cyan-400" />
-              <span className="text-xs">Querying audit trail...</span>
-            </div>
-          ) : entries.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64 text-slate-400 gap-2 text-center p-6">
-              <Activity size={36} className="text-slate-600 mb-1" />
-              <p className="text-xs font-bold text-white">
-                No audit events recorded for current filter
-              </p>
-              <p className="text-[11px] text-slate-400">
-                Actions taken across chat, documents, and code execution will be logged here.
-              </p>
-            </div>
-          ) : (
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-slate-950/90 backdrop-blur-md z-10 border-b border-white/[0.08]">
-                <tr>
-                  <th className="text-left px-5 py-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider w-[160px]">
-                    Timestamp
-                  </th>
-                  <th className="text-left px-3 py-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider w-[110px]">
-                    Category
-                  </th>
-                  <th className="text-left px-3 py-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider w-[100px]">
-                    Status
-                  </th>
-                  <th className="text-left px-3 py-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider w-[130px]">
-                    Model
-                  </th>
-                  <th className="text-left px-3 py-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    Task / Description
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.05]">
-                {entries.map((entry, i) => {
-                  const meta =
-                    CATEGORY_META[entry.category] ?? CATEGORY_META.system;
-
-                  return (
-                    <tr
-                      key={`${entry.timestamp}-${i}`}
-                      className="hover:bg-slate-900/60 transition-colors group"
-                    >
-                      {/* Timestamp */}
-                      <td className="px-5 py-3 font-mono text-[11px] text-slate-400 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
-                          <Clock size={11} className="text-slate-500" />
-                          <span>{formatTime(entry.timestamp)}</span>
-                        </div>
-                      </td>
-
-                      {/* Category badge */}
-                      <td className="px-3 py-3">
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-1.5 text-[10px] px-2.5 py-0.5 rounded-lg font-bold border",
-                            meta.color,
-                          )}
-                        >
-                          {meta.icon}
-                          <span>{meta.label}</span>
-                        </span>
-                      </td>
-
-                      {/* Status */}
-                      <td className="px-3 py-3">
-                        {entry.execution_status === "success" || entry.execution_status === "completed" ? (
-                          <StatusBadge status="success" label="Success" size="sm" />
-                        ) : entry.execution_status === "warning" ? (
-                          <StatusBadge status="warning" label="Warning" size="sm" />
-                        ) : (
-                          <StatusBadge status="error" label="Failed" size="sm" />
-                        )}
-                      </td>
-
-                      {/* Model */}
-                      <td className="px-3 py-3">
-                        <span className="font-mono text-[11px] text-slate-300">
-                          {entry.selected_model || "—"}
-                        </span>
-                      </td>
-
-                      {/* Description */}
-                      <td className="px-3 py-3">
-                        <span className="text-xs text-slate-300 line-clamp-1 group-hover:text-white font-sans">
-                          {entry.description || entry.task}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        {/* ── Pagination ─────────────────────────────────────────────── */}
-        {total > PAGE_SIZE && (
-          <div className="relative z-10 flex items-center justify-between px-6 py-3 border-t border-white/[0.08] bg-slate-950/80 backdrop-blur-md">
-            <p className="text-xs font-mono text-slate-400">
-              Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total} events
+            <h2 className="text-3xl font-semibold tracking-normal sm:text-4xl text-foreground">
+              Audit logs
+            </h2>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Trace operations without exposing confidential document content.
             </p>
+          </div>
+
+          <button
+            onClick={() => {
+              fetchLogs();
+              fetchStats();
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-border bg-panel text-xs text-muted-foreground hover:text-foreground hover:bg-panel-hover transition-colors"
+            title="Refresh logs"
+          >
+            <RefreshCw className={loading ? "size-3.5 animate-spin" : "size-3.5"} />
+            <span>Refresh</span>
+          </button>
+        </div>
+
+        {/* Status Line */}
+        <div className="mb-7 flex items-center gap-2 border-y border-border py-3 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          <span className="size-1.5 rounded-full bg-primary animate-pulse" />
+          IMMUTABLE AUDIT TRAIL
+          <span className="mx-2 text-faint">/</span>
+          {stats ? `${stats.total_records} TOTAL EVENTS` : "ACTIVE"}
+          <span className="mx-2 text-faint">/</span>
+          CRYPTO VERIFIABLE
+        </div>
+
+        {error && (
+          <div className="mb-6 flex items-center justify-between gap-3 border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive rounded-md">
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => goPage(currentPage - 1)}
-                disabled={currentPage <= 1}
-                className="flex items-center justify-center h-7 w-7 rounded-xl border border-white/10 bg-slate-900 text-slate-300 hover:bg-slate-800 hover:border-cyan-500/30 disabled:opacity-30 transition-all cursor-pointer"
-              >
-                <ChevronLeft size={14} />
-              </button>
-              <span className="text-xs font-mono text-slate-300 px-2">
-                Page {currentPage} of {totalPages}
-              </span>
-              <button
-                onClick={() => goPage(currentPage + 1)}
-                disabled={currentPage >= totalPages}
-                className="flex items-center justify-center h-7 w-7 rounded-xl border border-white/10 bg-slate-900 text-slate-300 hover:bg-slate-800 hover:border-cyan-500/30 disabled:opacity-30 transition-all cursor-pointer"
-              >
-                <ChevronRight size={14} />
-              </button>
+              <AlertCircle className="size-4 shrink-0" />
+              <span>{error}</span>
             </div>
+            <button onClick={() => setError(null)} className="text-xs hover:underline cursor-pointer">
+              Dismiss
+            </button>
           </div>
         )}
-      </div>
+
+        {/* Filters Header (matches reference) */}
+        <div>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm font-medium">Event history</span>
+            <div className="flex items-center gap-2">
+              <select
+                value={categoryFilter}
+                onChange={(e) => {
+                  setCategoryFilter(e.target.value);
+                  setOffset(0);
+                }}
+                className="rounded border border-border bg-panel px-3 py-1.5 text-xs text-foreground outline-none focus:border-primary"
+                aria-label="Filter audit events by category"
+              >
+                <option value="">All categories</option>
+                <option value="model">Model inference</option>
+                <option value="document">Documents</option>
+                <option value="tools">Sandbox / Tools</option>
+                <option value="security">Security & Auth</option>
+                <option value="knowledge">Knowledge Base</option>
+              </select>
+
+              <select
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setOffset(0);
+                }}
+                className="rounded border border-border bg-panel px-3 py-1.5 text-xs text-foreground outline-none focus:border-primary"
+                aria-label="Filter audit events by status"
+              >
+                <option value="">All statuses</option>
+                <option value="success">Success</option>
+                <option value="error">Error</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Table Header */}
+          <div className="grid grid-cols-[1fr_1fr_1fr] border border-border bg-panel px-5 py-3 font-mono text-[10px] uppercase text-muted-foreground sm:grid-cols-[1.5fr_2fr_1fr_1fr]">
+            <span>TIME</span>
+            <span>EVENT</span>
+            <span className="hidden sm:block">ACTOR / MODEL</span>
+            <span>STATUS</span>
+          </div>
+
+          {/* Event Rows */}
+          {loading ? (
+            <div className="flex flex-col items-center justify-center border-x border-b border-border bg-panel/35 py-16 text-xs text-muted-foreground gap-2">
+              <Loader2 className="size-5 animate-spin text-primary" />
+              <span>Loading audit logs...</span>
+            </div>
+          ) : logs.length ? (
+            <div className="border-x border-b border-border divide-y divide-border bg-panel/30">
+              {logs.map((record, idx) => (
+                <div
+                  key={`${record.timestamp}-${idx}`}
+                  className="grid grid-cols-[1fr_1fr_1fr] px-5 py-3.5 text-xs font-mono sm:grid-cols-[1.5fr_2fr_1fr_1fr] items-center hover:bg-panel-hover transition-colors"
+                >
+                  <span className="text-muted-foreground">
+                    {formatRelativeTime(record.timestamp)}
+                  </span>
+                  <div className="min-w-0 pr-2">
+                    <span className="truncate block font-sans font-medium text-foreground text-xs">
+                      {record.description || record.task}
+                    </span>
+                    {record.task && (
+                      <span className="text-[10px] text-muted-foreground truncate block font-mono">
+                        {record.task}
+                      </span>
+                    )}
+                  </div>
+                  <span className="hidden sm:block text-muted-foreground uppercase text-[10px]">
+                    {record.selected_model || record.category || "SYSTEM"}
+                  </span>
+                  <div>
+                    <span
+                      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                        record.execution_status === "success" || record.execution_status === "completed"
+                          ? "bg-primary/10 text-primary border border-primary/20"
+                          : "bg-destructive/10 text-destructive border border-destructive/20"
+                      }`}
+                    >
+                      {record.execution_status}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              icon={Clipboard}
+              title="No events to display"
+              description="The audit trail will show who did what, when, and the outcome when workbench operations are recorded."
+            />
+          )}
+
+          {/* Pagination Footer */}
+          {stats && stats.total_records > limit && (
+            <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground font-mono">
+              <span>
+                Showing {offset + 1}–{Math.min(offset + limit, stats.total_records)} of {stats.total_records}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handlePrevPage}
+                  disabled={offset === 0}
+                  className="p-1 rounded border border-border bg-panel disabled:opacity-40 hover:text-foreground"
+                >
+                  <ChevronLeft className="size-4" />
+                </button>
+                <button
+                  onClick={handleNextPage}
+                  disabled={offset + limit >= stats.total_records}
+                  className="p-1 rounded border border-border bg-panel disabled:opacity-40 hover:text-foreground"
+                >
+                  <ChevronRight className="size-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
     </AppShell>
   );
 }

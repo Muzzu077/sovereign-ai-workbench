@@ -5,18 +5,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
-  MessageSquare,
+  Blocks,
   FileText,
-  BookOpen,
-  Activity,
-  Cpu,
-  PanelLeftClose,
-  PanelLeftOpen,
+  BookOpenText,
   Code2,
+  Settings2,
+  Activity,
   ScrollText,
   ShieldCheck,
-  Sparkles,
-  Zap,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSidebar, useSystemStatus } from "./ShellContext";
@@ -28,17 +26,17 @@ interface NavItem {
   badge?: string;
 }
 
-const NAV_PRIMARY: NavItem[] = [
-  { label: "Workspace", href: "/workspace", icon: MessageSquare },
+const NAV_OPERATIONS: NavItem[] = [
+  { label: "Workspace", href: "/workspace", icon: Blocks },
   { label: "Documents", href: "/documents", icon: FileText },
-  { label: "Knowledge", href: "/knowledge", icon: BookOpen },
-  { label: "Code Sandbox", href: "/code", icon: Code2, badge: "NEW" },
+  { label: "Knowledge", href: "/knowledge", icon: BookOpenText },
+  { label: "Code sandbox", href: "/code", icon: Code2 },
 ];
 
-const NAV_SECONDARY: NavItem[] = [
-  { label: "Health & VRAM", href: "/health", icon: Activity },
-  { label: "Model Registry", href: "/models", icon: Cpu },
-  { label: "Audit Logs", href: "/logs", icon: ScrollText },
+const NAV_CONTROL: NavItem[] = [
+  { label: "Models", href: "/models", icon: Settings2 },
+  { label: "System health", href: "/health", icon: Activity },
+  { label: "Audit logs", href: "/logs", icon: ScrollText },
 ];
 
 export default function Sidebar() {
@@ -58,65 +56,26 @@ export default function Sidebar() {
         title={collapsed ? label : undefined}
         aria-current={active ? "page" : undefined}
         className={cn(
-          "group relative flex items-center rounded-xl font-medium transition-all select-none",
-          collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-3 py-2.5",
-          active
-            ? "text-cyan-300"
-            : "text-slate-400 hover:text-white hover:bg-white/[0.05]",
+          "nav-item",
+          active && "nav-item-active",
+          collapsed && "justify-center px-0",
         )}
       >
-        {/* Animated active glowing pill */}
-        {active && (
-          <motion.div
-            layoutId="sidebar-active-pill"
-            transition={{
-              type: "spring",
-              stiffness: 400,
-              damping: 35,
-            }}
-            className="absolute inset-0 rounded-xl bg-gradient-to-r from-cyan-950/70 via-slate-900/90 to-indigo-950/50 border border-cyan-500/30 shadow-[0_0_20px_rgba(6,182,212,0.15)]"
-          />
-        )}
-
-        {/* Active accent edge bar */}
-        {active && (
-          <motion.span
-            layoutId="sidebar-active-bar"
-            className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.8)]"
-          />
-        )}
-
         <Icon
-          size={18}
-          strokeWidth={active ? 2.2 : 1.8}
-          className={cn(
-            "relative z-10 shrink-0 transition-transform duration-200",
-            active ? "text-cyan-400" : "group-hover:scale-110 group-hover:text-cyan-300",
-          )}
+          className={cn("size-4 shrink-0", active ? "text-primary" : "text-muted-foreground")}
         />
         {!collapsed && (
-          <span className="relative z-10 text-[13px] font-semibold tracking-[-0.01em]">
-            {label}
-          </span>
+          <span className="truncate">{label}</span>
         )}
-
         {!collapsed && badge && (
-          <span className="relative z-10 ml-auto px-1.5 py-0.2 rounded text-[9px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+          <span className="ml-auto font-mono text-[9px] uppercase tracking-wider text-primary border border-primary/30 rounded px-1.5 py-0.5">
             {badge}
           </span>
         )}
-
-        {/* Collapsed tooltip */}
         {collapsed && (
           <span
             role="tooltip"
-            className={cn(
-              "pointer-events-none absolute left-full ml-3 z-50",
-              "rounded-xl bg-slate-900 border border-white/10 px-3 py-1.5",
-              "text-[11px] font-semibold text-white shadow-2xl",
-              "opacity-0 group-hover:opacity-100",
-              "transition-opacity duration-150 whitespace-nowrap",
-            )}
+            className="pointer-events-none absolute left-full ml-3 z-50 rounded bg-popover border border-border px-2.5 py-1 text-xs text-popover-foreground shadow-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap"
           >
             {label}
           </span>
@@ -131,117 +90,94 @@ export default function Sidebar() {
       aria-label="Main navigation"
       className={cn(
         "fixed inset-y-0 left-0 z-40 flex flex-col",
-        "bg-[var(--color-wb-sidebar)] border-r border-white/[0.08]",
-        "transition-[width] duration-[var(--duration-slow)] ease-[var(--ease-out-smooth)]",
-        "shadow-2xl",
+        "bg-sidebar border-r border-border",
+        "transition-all duration-200",
       )}
-      style={{ width: collapsed ? "var(--sidebar-collapsed)" : "var(--sidebar-width)" }}
+      style={{ width: collapsed ? "76px" : "252px" }}
     >
       {/* ── Brand header ──────────────────────────────────────── */}
       <div
         className={cn(
-          "relative flex items-center gap-3 border-b border-white/[0.08] overflow-hidden",
-          "h-[var(--topbar-height)]",
-          collapsed ? "justify-center px-0" : "px-4",
+          "flex h-[76px] items-center justify-between border-b border-border px-5",
+          collapsed && "justify-center px-0",
         )}
       >
-        {/* Subtle glowing orb behind brand */}
-        <div className="absolute -left-4 top-1/2 -translate-y-1/2 h-20 w-20 rounded-full bg-cyan-500/20 blur-2xl pointer-events-none" />
-
-        <div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-500 to-indigo-600 border border-cyan-300/40 shadow-[0_0_16px_rgba(6,182,212,0.4)]">
-          <ShieldCheck size={18} className="text-white" />
-        </div>
-        {!collapsed && (
-          <div className="flex flex-col">
-            <span className="text-[13px] font-bold tracking-tight text-white leading-tight flex items-center gap-1.5">
-              Sovereign AI
-              <span className="text-[9px] px-1.5 py-0.2 rounded font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                AIR-GAP
-              </span>
-            </span>
-            <span className="text-[10px] text-slate-400 font-medium leading-tight">
-              Intelligence Workbench
-            </span>
-          </div>
-        )}
+        <Link href="/workspace" className="flex min-w-0 items-center gap-3">
+          <img src="/sovereign-mark.svg" alt="Sovereign" className="size-9 shrink-0" />
+          {!collapsed && (
+            <div className="min-w-0">
+              <div className="text-[13px] font-bold leading-tight tracking-[0.12em] text-foreground">
+                SOVEREIGN<span className="text-primary">.</span>
+              </div>
+              <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.13em] text-muted-foreground">
+                AI Workbench
+              </div>
+            </div>
+          )}
+        </Link>
       </div>
 
       {/* ── Navigation ────────────────────────────────────────── */}
-      <nav className={cn("flex-1 py-4", collapsed ? "px-2" : "px-3")}>
-        <div className="space-y-1.5">
-          {NAV_PRIMARY.map(renderNavItem)}
-        </div>
-
-        <div className={cn("my-4 border-t border-white/[0.06]", collapsed ? "mx-1" : "mx-0")} />
-
+      <div className="flex-1 overflow-y-auto px-3 py-6">
         {!collapsed && (
-          <div className="mb-2 px-3">
-            <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">
-              Telemetry & Control
-            </span>
+          <div className="mb-3 px-3 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
+            OPERATIONS
           </div>
         )}
-        <div className="space-y-1.5">
-          {NAV_SECONDARY.map(renderNavItem)}
-        </div>
-      </nav>
+        <nav aria-label="Main operations" className="space-y-1">
+          {NAV_OPERATIONS.map(renderNavItem)}
+        </nav>
+
+        {!collapsed && (
+          <div className="mb-3 mt-8 px-3 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
+            CONTROL CENTER
+          </div>
+        )}
+        {collapsed && <div className="h-7" />}
+        <nav aria-label="Control center" className="space-y-1">
+          {NAV_CONTROL.map(renderNavItem)}
+        </nav>
+      </div>
 
       {/* ── Bottom status + collapse ──────────────────────────── */}
-      <div
-        className={cn(
-          "border-t border-white/[0.08] bg-slate-950/60",
-          collapsed ? "px-2 py-3" : "px-3.5 py-3",
+      <div className="border-t border-border p-3">
+        {!collapsed && (
+          <div className="mb-3 rounded-md border border-border bg-panel px-3 py-3">
+            <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+              <ShieldCheck className="size-4 text-primary" /> Local-first architecture
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+              {backendUp
+                ? "Connected to local air-gapped runtime with zero egress."
+                : "Air-gapped security model. All data and weights remain on-premise."}
+            </p>
+          </div>
         )}
-      >
-        {/* Backend status */}
-        <div
-          className={cn(
-            "flex items-center rounded-xl p-2 transition-colors",
-            collapsed ? "justify-center" : "gap-2.5 bg-slate-900/60 border border-white/[0.06]",
-          )}
-        >
-          <span className="relative flex h-2.5 w-2.5 shrink-0 items-center justify-center">
-            {backendUp && (
-              <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
-            )}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 px-2 py-1 font-mono text-[10px] text-muted-foreground">
             <span
               className={cn(
-                "relative inline-flex h-2.5 w-2.5 rounded-full",
+                "size-2 rounded-full",
                 backendUp === null
-                  ? "bg-amber-400"
+                  ? "bg-warning"
                   : backendUp
                   ? "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"
-                  : "bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.8)]",
+                  : "bg-destructive",
               )}
             />
-          </span>
-          {!collapsed && (
-            <div className="flex flex-col min-w-0">
-              <span className="text-[11px] font-semibold text-white leading-tight">
-                {backendUp === null
-                  ? "Connecting..."
-                  : backendUp
-                  ? "Neural Engine Online"
-                  : "Backend Offline"}
-              </span>
-              <span className="text-[9px] text-slate-400 font-mono leading-tight truncate">
-                127.0.0.1:8000
-              </span>
-            </div>
-          )}
+            {!collapsed && (
+              <span>{backendUp ? "RUNTIME CONNECTED" : "OFFLINE / LOCAL"}</span>
+            )}
+          </div>
+          <button
+            onClick={toggle}
+            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <PanelLeftClose className={cn("size-4 transition-transform", collapsed && "rotate-180")} />
+          </button>
         </div>
-
-        {/* Collapse toggle */}
-        <button
-          onClick={toggle}
-          className={cn(
-            "mt-2 flex w-full items-center justify-center rounded-lg py-1.5",
-            "text-slate-400 hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer",
-          )}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
-        </button>
       </div>
     </aside>
   );

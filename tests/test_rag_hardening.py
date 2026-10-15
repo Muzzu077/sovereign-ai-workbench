@@ -974,6 +974,7 @@ class TestHealthEndpointSubsystems:
         os.environ["SAW_KNOWLEDGE_DB_PATH"] = str(tmp_path / "knowledge.db")
         os.environ["SAW_VECTOR_STORAGE_PATH"] = str(tmp_path / "vectors")
         os.environ["SAW_AUDIT_LOG_FILE"] = str(tmp_path / "audit.log")
+        os.environ["SAW_CODER_ENABLED"] = "false"
         from fastapi.testclient import TestClient
         from app.main import create_app
         app = create_app()

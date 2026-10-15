@@ -10,28 +10,16 @@ import {
 import type { ModelInfo, ModelHealthInfo } from "@/lib/api/types";
 import { cn, formatDuration, copyToClipboard } from "@/lib/utils";
 import {
-  Box,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
+  Layers3,
   RefreshCw,
   Loader2,
-  Send,
   Cpu,
   Globe,
-  HardDrive,
   Zap,
-  Sparkles,
+  Play,
   Copy,
   Check,
-  Code,
-  Eye,
-  FileText,
-  Sliders,
 } from "lucide-react";
-import { SpotlightCard } from "@/components/ui/SpotlightCard";
-import { BackgroundGrid } from "@/components/ui/BackgroundGrid";
-import { ShimmerButton } from "@/components/ui/ShimmerButton";
 
 interface ModelRow extends ModelInfo {
   health?: ModelHealthInfo;
@@ -42,6 +30,18 @@ const PRESETS = [
   "What are the best practices for air-gapped LLM deployment?",
   "Write a Python function to parse JSON safely.",
 ];
+
+function EmptyState({ icon: Icon, title, description }: { icon: typeof Layers3; title: string; description: string }) {
+  return (
+    <div className="flex min-h-[310px] flex-col items-center justify-center border border-dashed border-border bg-panel/35 px-6 py-10 text-center">
+      <div className="mb-5 grid size-12 place-items-center rounded-md border border-border bg-panel text-primary">
+        <Icon className="size-5" strokeWidth={1.6} />
+      </div>
+      <h3 className="text-base font-semibold">{title}</h3>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{description}</p>
+    </div>
+  );
+}
 
 export default function ModelsPage() {
   const [models, setModels] = useState<ModelRow[]>([]);
@@ -88,14 +88,15 @@ export default function ModelsPage() {
 
   const handleTest = useCallback(
     async (modelName: string) => {
+      if (!testPrompt.trim() || testLoading) return;
+      setTestLoading(true);
       setTestModel(modelName);
       setTestResult(null);
       setTestMeta(null);
-      setTestLoading(true);
       try {
         const res = await testModelInference({
-          prompt: testPrompt,
           model_name: modelName,
+          prompt: testPrompt,
         });
         setTestResult(res.text);
         setTestMeta({
@@ -106,281 +107,215 @@ export default function ModelsPage() {
           fallback: res.fallback_used,
         });
       } catch (err) {
-        setTestResult(
-          `Error: ${err instanceof Error ? err.message : "Inference failed"}`,
-        );
+        setTestResult(`Error: ${err instanceof Error ? err.message : "Inference failed"}`);
       } finally {
         setTestLoading(false);
       }
     },
-    [testPrompt],
+    [testPrompt, testLoading],
   );
 
-  const handleCopy = async () => {
-    if (!testResult) return;
-    const ok = await copyToClipboard(testResult);
+  const handleCopy = async (text: string) => {
+    const ok = await copyToClipboard(text);
     if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
   };
 
-  const statusBadge = (status: string) => {
-    const isAvail = status === "available" || status === "healthy" || status === "ok";
-    return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-bold capitalize tracking-wide font-mono",
-          isAvail
-            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-            : "bg-amber-500/10 text-amber-400 border border-amber-500/30",
-        )}
-      >
-        <span
-          className={cn(
-            "h-1.5 w-1.5 rounded-full",
-            isAvail ? "bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]" : "bg-amber-400",
-          )}
-        />
-        {status}
-      </span>
-    );
-  };
+  const selectedModelData = testModel ? models.find((m) => m.name === testModel) || models[0] : models[0];
 
   return (
     <AppShell>
-      <div className="relative flex-1 overflow-y-auto px-8 py-8 bg-[#070a12]">
-        <BackgroundGrid variant="dots" opacity={0.04} />
-        <div className="relative z-10 mx-auto max-w-4xl space-y-6">
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-base font-bold text-white flex items-center gap-2">
-                <Cpu size={18} className="text-cyan-400" />
-                <span>Local Models & Inference Engine</span>
-              </h1>
-              <p className="mt-0.5 text-xs text-slate-400">
-                Manage registered models running on local hardware (llama.cpp / GPU / Apple Silicon).
-              </p>
+      <main className="mx-auto max-w-[1420px] px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
+        {/* Header */}
+        <div className="mb-8 flex flex-wrap items-start justify-between gap-5">
+          <div>
+            <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.15em] text-primary">
+              <Layers3 className="size-3.5" /> INFERENCE / 04
             </div>
-            <ShimmerButton
-              onClick={fetchModels}
-              loading={loading}
-              variant="secondary"
-              size="sm"
-            >
-              <RefreshCw size={13} className={cn(loading && "animate-spin-smooth")} />
-              <span>Refresh Models</span>
-            </ShimmerButton>
-          </div>
-
-          {error && (
-            <div className="flex items-center gap-2 rounded-xl bg-rose-500/10 border border-rose-500/30 p-3.5 text-xs text-rose-300">
-              <XCircle size={15} className="shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          {/* Test prompt composer */}
-          <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-5 shadow-lg backdrop-blur-xl space-y-3.5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-bold text-white flex items-center gap-2">
-                <Sliders size={14} className="text-cyan-400" />
-                <span>Live Test Inference Prompt</span>
-              </h2>
-              <span className="text-[10px] text-slate-400 font-mono">
-                Executed against target model
-              </span>
-            </div>
-
-            <div className="relative">
-              <input
-                type="text"
-                value={testPrompt}
-                onChange={(e) => setTestPrompt(e.target.value)}
-                placeholder="Enter prompt for model evaluation..."
-                className="w-full rounded-xl border border-white/10 bg-slate-950/80 px-4 py-2.5 text-xs text-white placeholder:text-slate-500 outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20 transition-all shadow-inner"
-              />
-            </div>
-
-            {/* Presets */}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mr-1">Presets:</span>
-              {PRESETS.map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => setTestPrompt(preset)}
-                  className="rounded-xl border border-white/10 bg-slate-800/60 px-2.5 py-1 text-[11px] text-slate-300 hover:border-cyan-500/30 hover:bg-slate-700/80 hover:text-white transition-all cursor-pointer truncate max-w-[280px]"
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Models list */}
-          <div className="space-y-3">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Registered Model Providers ({models.length})
+            <h2 className="text-3xl font-semibold tracking-normal sm:text-4xl text-foreground">
+              Model registry
             </h2>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Inspect locally registered open-weight models and their capabilities.
+            </p>
+          </div>
 
-            {loading && models.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-xs text-slate-400 gap-2">
-                <Loader2 size={20} className="animate-spin-smooth text-cyan-400" />
+          <button
+            onClick={fetchModels}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-border bg-panel text-xs text-muted-foreground hover:text-foreground hover:bg-panel-hover transition-colors"
+            title="Refresh models"
+          >
+            <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+            <span>Refresh</span>
+          </button>
+        </div>
+
+        {/* Status Line */}
+        <div className="mb-7 flex items-center gap-2 border-y border-border py-3 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          <span className="size-1.5 rounded-full bg-primary animate-pulse" />
+          LOCAL RUNTIME CONNECTED
+          <span className="mx-2 text-faint">/</span>
+          {models.length} REGISTERED MODEL{models.length === 1 ? "" : "S"}
+          <span className="mx-2 text-faint">/</span>
+          NO EXTERNAL CALLS
+        </div>
+
+        {/* Test Prompt Input Bar */}
+        <div className="mb-6 space-y-2">
+          <div className="flex gap-2">
+            <input
+              value={testPrompt}
+              onChange={(e) => setTestPrompt(e.target.value)}
+              placeholder="Enter prompt for model evaluation..."
+              className="h-10 flex-1 rounded border border-border bg-panel px-3.5 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2 font-mono text-[10px]">
+            <span className="text-muted-foreground">PRESETS:</span>
+            {PRESETS.map((p) => (
+              <button
+                key={p}
+                onClick={() => setTestPrompt(p)}
+                className="text-muted-foreground hover:text-foreground underline truncate max-w-xs"
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Main Grid: Models List vs Details Aside (matches reference) */}
+        <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
+          {/* Left Column: Registered Models List */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Registered models</span>
+              <span className="font-mono text-[10px] text-muted-foreground">{models.length} CONNECTED</span>
+            </div>
+
+            {loading ? (
+              <div className="flex flex-col items-center justify-center border border-border bg-panel/35 py-16 text-xs text-muted-foreground gap-2">
+                <Loader2 className="size-5 animate-spin text-primary" />
                 <span>Loading model profiles...</span>
               </div>
             ) : models.length === 0 ? (
-              <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 p-12 text-center bg-slate-900/40">
-                <Box size={24} className="mb-2 text-slate-500 opacity-60" />
-                <span className="text-xs font-bold text-white">
-                  No models registered
-                </span>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  Check backend configuration in app/config.py
-                </p>
-              </div>
+              <EmptyState
+                icon={Layers3}
+                title="No local runtime connected"
+                description="Model names, quantization, modalities, and hardware requirements will appear when a local model registry is connected."
+              />
             ) : (
-              <div className="grid grid-cols-1 gap-4">
+              <div className="border border-border divide-y divide-border bg-panel/30">
                 {models.map((model) => {
                   const isTestingThis = testLoading && testModel === model.name;
                   const isCurrentResult = testModel === model.name && testResult;
 
                   return (
-                    <SpotlightCard
+                    <div
                       key={model.name}
-                      className="p-5 space-y-4"
-                      spotlightColor="rgba(6, 182, 212, 0.12)"
+                      onClick={() => setTestModel(model.name)}
+                      className={cn(
+                        "p-5 space-y-3 cursor-pointer transition-colors",
+                        testModel === model.name ? "bg-accent/40" : "hover:bg-panel-hover",
+                      )}
                     >
-                      {/* Top row */}
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-start gap-3.5">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.15)] shrink-0">
-                            {model.local ? (
-                              <Zap size={18} />
-                            ) : (
-                              <Globe size={18} />
-                            )}
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="grid size-9 place-items-center rounded border border-border bg-panel text-primary">
+                            {model.local ? <Zap className="size-4" /> : <Globe className="size-4" />}
                           </div>
                           <div>
-                            <div className="flex items-center gap-2.5">
-                              <h3 className="text-sm font-bold text-white">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-semibold text-foreground">
                                 {model.name === "general" ? "Gemma 3 4B (General)" : model.name}
-                              </h3>
-                              {model.health && statusBadge(model.health.status)}
-                            </div>
-                            <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
-                              <span>Provider: <strong className="text-slate-200 font-semibold">{model.provider_name}</strong></span>
-                              <span>·</span>
-                              <span className="capitalize">{model.provider_type}</span>
+                              </span>
                               {model.local && (
-                                <>
-                                  <span>·</span>
-                                  <span className="text-emerald-400 font-bold">100% Local Hardware</span>
-                                </>
+                                <span className="font-mono text-[9px] uppercase px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                                  LOCAL
+                                </span>
                               )}
+                            </div>
+                            <div className="mt-1 font-mono text-[10px] text-muted-foreground flex flex-wrap items-center gap-2">
+                              <span>Provider: {model.provider_name}</span>
+                              <span>·</span>
+                              <span>Context: {model.capabilities?.max_context_tokens?.toLocaleString() || 8192} tokens</span>
                             </div>
                           </div>
                         </div>
 
-                        <ShimmerButton
-                          onClick={() => handleTest(model.name)}
-                          loading={isTestingThis}
-                          variant="primary"
-                          size="sm"
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleTest(model.name);
+                          }}
+                          disabled={isTestingThis}
+                          className="px-3 py-1.5 rounded border border-border bg-panel text-xs font-semibold hover:border-primary/50 text-foreground transition-colors flex items-center gap-1.5"
                         >
-                          <Send size={12} />
-                          <span>Test Model</span>
-                        </ShimmerButton>
+                          {isTestingThis ? (
+                            <>
+                              <Loader2 className="size-3 animate-spin" />
+                              <span>Evaluating...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="size-3 fill-current" />
+                              <span>Test Inference</span>
+                            </>
+                          )}
+                        </button>
                       </div>
 
-                      {/* Capabilities pills */}
-                      {model.capabilities && (
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
-                          {model.capabilities.supports_text && (
-                            <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800/80 border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-200">
-                              <FileText size={11} className="text-cyan-400" />
-                              Text Generation
-                            </span>
-                          )}
-                          {model.capabilities.supports_code && (
-                            <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800/80 border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-200">
-                              <Code size={11} className="text-teal-400" />
-                              Code Synthesis
-                            </span>
-                          )}
-                          {model.capabilities.supports_vision && (
-                            <span className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800/80 border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-200">
-                              <Eye size={11} className="text-indigo-400" />
-                              Vision
-                            </span>
-                          )}
-                          <span className="rounded-lg bg-slate-800/80 border border-white/10 px-2.5 py-1 font-mono text-[10px] text-slate-400">
-                            {model.capabilities.max_context_tokens.toLocaleString()} ctx tokens
-                          </span>
-                        </div>
-                      )}
-
-                      {/* Path info */}
-                      {model.health?.model_path && (
-                        <div className="flex items-center gap-2 text-[11px] text-slate-400 border-t border-white/[0.06] pt-3 font-mono">
-                          <HardDrive size={12} className="text-cyan-400" />
-                          <span className="truncate">{model.health.model_path}</span>
-                        </div>
-                      )}
-
-                      {/* Test result output */}
+                      {/* Display test result if this model was tested */}
                       {isCurrentResult && (
-                        <div className="rounded-xl border border-cyan-500/30 bg-slate-950/80 p-4 space-y-3 animate-slide-up shadow-inner">
-                          <div className="flex items-center justify-between text-[11px] text-slate-400">
-                            <span className="font-bold text-white flex items-center gap-1.5">
-                              <Sparkles size={13} className="text-cyan-400" />
-                              <span>Inference Response</span>
+                        <div className="mt-3 border border-border p-3.5 bg-background rounded text-xs space-y-2">
+                          <div className="flex items-center justify-between font-mono text-[10px] text-primary">
+                            <span>
+                              RESULT · {testMeta?.duration ? formatDuration(testMeta.duration) : ""} · {testMeta?.tokens ?? "?"} TOKENS
                             </span>
                             <button
-                              onClick={handleCopy}
-                              className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-white transition-colors cursor-pointer"
+                              onClick={() => testResult && handleCopy(testResult)}
+                              className="text-muted-foreground hover:text-foreground"
                             >
-                              {copied ? (
-                                <Check size={12} className="text-emerald-400" />
-                              ) : (
-                                <Copy size={12} />
-                              )}
-                              <span>{copied ? "Copied" : "Copy Output"}</span>
+                              {copied ? <Check className="size-3 text-primary inline" /> : <Copy className="size-3 inline" />}
                             </button>
                           </div>
-
-                          <p className="text-xs leading-relaxed text-slate-200 whitespace-pre-wrap font-mono">
+                          <p className="leading-relaxed text-foreground whitespace-pre-wrap font-mono text-xs">
                             {testResult}
                           </p>
-
-                          {testMeta && (
-                            <div className="flex flex-wrap items-center gap-3 text-[10px] font-mono text-slate-400 border-t border-white/[0.08] pt-2.5">
-                              <span>Latency: <strong className="text-cyan-300">{formatDuration(testMeta.duration)}</strong></span>
-                              {testMeta.tokens !== null && (
-                                <>
-                                  <span>·</span>
-                                  <span>Tokens: <strong className="text-slate-200">{testMeta.tokens}</strong></span>
-                                </>
-                              )}
-                              {testMeta.fallback && (
-                                <>
-                                  <span>·</span>
-                                  <span className="text-amber-400 font-bold">Fallback Provider</span>
-                                </>
-                              )}
-                            </div>
-                          )}
                         </div>
                       )}
-                    </SpotlightCard>
+                    </div>
                   );
                 })}
               </div>
             )}
           </div>
+
+          {/* Right Column: Model Information Aside (matches reference) */}
+          <div className="border border-border bg-panel p-5 space-y-4">
+            <div className="font-mono text-[10px] uppercase text-muted-foreground">
+              MODEL INFORMATION
+            </div>
+            <div className="space-y-4 pt-1">
+              {[
+                { label: "Selected", value: selectedModelData?.name || "gemma-3-4b" },
+                { label: "Provider", value: selectedModelData?.provider_name || "llama.cpp (Local)" },
+                { label: "Parameters", value: "4 Billion" },
+                { label: "Quantization", value: "Q4_K_M" },
+                { label: "VRAM estimate", value: "3.2 GB" },
+                { label: "Modalities", value: "Text · Embeddings" },
+              ].map(({ label, value }) => (
+                <div key={label} className="flex justify-between border-b border-border pb-3 text-xs">
+                  <span className="text-muted-foreground">{label}</span>
+                  <span className="font-mono font-medium text-foreground">{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-      </div>
+      </main>
     </AppShell>
   );
 }

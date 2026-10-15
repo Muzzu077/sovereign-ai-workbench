@@ -13,40 +13,22 @@ import type {
   KnowledgeDocument,
   SearchResultItem,
   QueryResponse,
-  EvidenceQuality,
 } from "@/lib/api/types";
 import { cn, formatBytes, formatDuration, formatRelativeTime, copyToClipboard } from "@/lib/utils";
-import { EvidenceBadge, SourceCitation } from "@/components/workspace";
 import {
   Search,
-  BookOpen,
+  BookOpenText,
+  Database,
   Trash2,
   Loader2,
   AlertCircle,
   RefreshCw,
-  Database,
-  MessageSquare,
-  FileText,
-  Sparkles,
-  ArrowRight,
   Clock,
-  Layers,
-  CheckCircle2,
-  Cpu,
-  ShieldCheck,
   Download,
   Copy,
   Check,
-  Share2,
-  Sliders,
+  Sparkles,
 } from "lucide-react";
-import { SpotlightCard } from "@/components/ui/SpotlightCard";
-import { BackgroundGrid } from "@/components/ui/BackgroundGrid";
-import { AnimatedTabs, type TabItem } from "@/components/ui/AnimatedTabs";
-import { CountUp } from "@/components/ui/CountUp";
-import { ShimmerButton } from "@/components/ui/ShimmerButton";
-
-type Tab = "query" | "search" | "documents";
 
 const QUERY_PRESETS = [
   "What are the mandatory air-gapped system maintenance protocols?",
@@ -54,8 +36,20 @@ const QUERY_PRESETS = [
   "Summarize key operational risks and audit procedures.",
 ];
 
+function EmptyState({ icon: Icon, title, description }: { icon: typeof Database; title: string; description: string }) {
+  return (
+    <div className="flex min-h-[310px] flex-col items-center justify-center border border-dashed border-border bg-panel/35 px-6 py-10 text-center">
+      <div className="mb-5 grid size-12 place-items-center rounded-md border border-border bg-panel text-primary">
+        <Icon className="size-5" strokeWidth={1.6} />
+      </div>
+      <h3 className="text-base font-semibold">{title}</h3>
+      <p className="mt-2 max-w-sm text-sm leading-6 text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
 export default function KnowledgePage() {
-  const [tab, setTab] = useState<Tab>("query");
+  const [tab, setTab] = useState<"query" | "search" | "documents">("query");
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +58,6 @@ export default function KnowledgePage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
-  const [searchEvidence, setSearchEvidence] = useState<EvidenceQuality | null>(null);
   const [searchTime, setSearchTime] = useState<number | null>(null);
   const [searched, setSearched] = useState(false);
 
@@ -96,15 +89,12 @@ export default function KnowledgePage() {
     if (!searchQuery.trim()) return;
     setSearchLoading(true);
     setSearchResults([]);
-    setSearchEvidence(null);
     setSearchTime(null);
-    setSearched(true);
-    setError(null);
     try {
       const res = await searchKnowledge({ query: searchQuery, top_k: 10 });
       setSearchResults(res.results);
-      setSearchEvidence(res.evidence_quality);
       setSearchTime(res.retrieval_time_ms);
+      setSearched(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed");
     } finally {
@@ -112,37 +102,34 @@ export default function KnowledgePage() {
     }
   }, [searchQuery]);
 
-  const handleQuery = useCallback(async (customQuery?: string) => {
-    const q = customQuery || queryText;
-    if (!q.trim()) return;
-    if (customQuery) setQueryText(customQuery);
+  const handleQuery = useCallback(async (overrideText?: string) => {
+    const text = overrideText || queryText;
+    if (!text.trim()) return;
+    if (overrideText) setQueryText(overrideText);
     setQueryLoading(true);
     setQueryResult(null);
-    setError(null);
     try {
-      const res = await queryKnowledge({ query: q, top_k: 5 });
+      const res = await queryKnowledge({ query: text, top_k: 5 });
       setQueryResult(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Query failed");
+      setError(err instanceof Error ? err.message : "Knowledge query failed");
     } finally {
       setQueryLoading(false);
     }
   }, [queryText]);
 
-  const handleDeleteDoc = useCallback(
-    async (docId: string) => {
-      try {
-        await deleteKnowledgeDocument(docId);
-        setDocuments((prev) => prev.filter((d) => d.document_id !== docId));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Delete failed");
-      }
-    },
-    [],
-  );
+  const handleDelete = useCallback(async (docId: string) => {
+    if (!confirm("Remove this document and all indexed chunks from vector store?")) return;
+    try {
+      await deleteKnowledgeDocument(docId);
+      setDocuments((prev) => prev.filter((d) => d.document_id !== docId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete knowledge document");
+    }
+  }, []);
 
   const handleCopyAnswer = async () => {
-    if (!queryResult) return;
+    if (!queryResult?.answer) return;
     const ok = await copyToClipboard(queryResult.answer);
     if (ok) {
       setCopiedAnswer(true);
@@ -150,18 +137,18 @@ export default function KnowledgePage() {
     }
   };
 
-  const handleExportDocx = async () => {
-    if (!queryResult) return;
+  const handleExport = async () => {
+    if (!queryResult?.answer) return;
     try {
       setExportingDocx(true);
       const blob = await exportToDocx({
-        title: `Knowledge Synthesis - ${queryText.slice(0, 40)}`,
-        content: `# Grounded Knowledge Synthesis\n\n**Query:** ${queryText}\n**Model:** ${queryResult.model_used}\n**Retrieved Sources:** ${queryResult.retrieval_count}\n**Latency:** ${queryResult.total_time_ms}ms\n\n## Synthesized Answer\n${queryResult.answer}\n\n## Verified Citations\n${queryResult.citations.map((c) => `- **${c.document}** (Section: ${c.section || "N/A"}, Score: ${c.relevance_score ? `${(c.relevance_score * 100).toFixed(0)}%` : "N/A"})`).join("\n")}`,
+        title: `RAG Briefing - ${queryText}`,
+        content: `# Evidence Synthesis\n\n**Query:** ${queryText}\n**Evidence Quality:** ${queryResult.evidence_quality}\n\n## Answer\n${queryResult.answer}`,
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `knowledge_synthesis_${Date.now()}.docx`;
+      a.download = `rag_briefing_${Date.now()}.docx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -173,269 +160,248 @@ export default function KnowledgePage() {
     }
   };
 
-  const totalChunks = documents.reduce((acc, d) => acc + (d.chunk_count || 0), 0);
-
-  const TABS: TabItem<Tab>[] = [
-    { id: "query", label: "RAG Query & Reasoning", icon: MessageSquare },
-    { id: "search", label: "Neural Vector Search", icon: Search },
-    { id: "documents", label: "Indexed Vector Store", icon: Database, badge: documents.length },
-  ];
+  const totalChunks = documents.reduce((acc, d) => acc + d.chunk_count, 0);
 
   return (
     <AppShell>
-      <div className="relative flex h-full flex-col bg-[#070a12] overflow-hidden">
-        <BackgroundGrid variant="dots" opacity={0.04} />
+      <main className="mx-auto max-w-[1420px] px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
+        {/* Page Header */}
+        <div className="mb-8 flex flex-wrap items-start justify-between gap-5">
+          <div>
+            <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.15em] text-primary">
+              <BookOpenText className="size-3.5" /> RETRIEVAL / 02
+            </div>
+            <h2 className="text-3xl font-semibold tracking-normal sm:text-4xl text-foreground">
+              Knowledge base
+            </h2>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Find evidence across indexed organizational knowledge.
+            </p>
+          </div>
 
-        {/* ── Subheader / Tab Bar ───────────────────────────────────── */}
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.08] bg-slate-950/70 backdrop-blur-xl px-8 py-3.5 z-10">
-          <AnimatedTabs
-            tabs={TABS}
-            activeTab={tab}
-            onChange={(id) => setTab(id)}
-            size="md"
-          />
-
-          <div className="flex items-center gap-3 text-xs font-mono text-slate-400 bg-slate-900/80 border border-white/10 px-4 py-1.5 rounded-xl shadow-xs">
-            <span className="flex items-center gap-1.5">
-              <Database size={13} className="text-cyan-400" />
-              <span className="font-extrabold text-white">
-                <CountUp value={documents.length} duration={0.8} />
-              </span> docs
-            </span>
-            <span>·</span>
-            <span className="flex items-center gap-1.5">
-              <Layers size={13} className="text-cyan-400" />
-              <span className="font-extrabold text-white">
-                <CountUp value={totalChunks} duration={0.8} />
-              </span> chunks
-            </span>
-            <span>·</span>
-            <span className="flex items-center gap-1 text-[11px] text-cyan-300 font-bold">
-              <Cpu size={12} /> ONNX 384-D
-            </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchDocuments}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-border bg-panel text-xs text-muted-foreground hover:text-foreground hover:bg-panel-hover transition-colors"
+              title="Refresh knowledge base"
+            >
+              <RefreshCw className={cn("size-3.5", loadingDocs && "animate-spin")} />
+              <span>Refresh</span>
+            </button>
           </div>
         </div>
 
-        {/* ── Tab Content ────────────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto px-8 py-8">
-          <div className="mx-auto max-w-4xl space-y-6">
-            {error && (
-              <div className="flex items-center gap-2 rounded-xl bg-rose-500/10 border border-rose-500/30 p-3.5 text-xs text-rose-300">
-                <AlertCircle size={15} className="shrink-0" />
-                <span className="flex-1">{error}</span>
-                <button onClick={() => setError(null)} className="underline font-bold cursor-pointer">
-                  Dismiss
-                </button>
-              </div>
-            )}
+        {/* Status Line */}
+        <div className="mb-7 flex items-center gap-2 border-y border-border py-3 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          <span className="size-1.5 rounded-full bg-primary animate-pulse" />
+          VECTOR STORE ACTIVE
+          <span className="mx-2 text-faint">/</span>
+          {documents.length} DOCUMENT{documents.length === 1 ? "" : "S"} ({totalChunks} CHUNKS)
+          <span className="mx-2 text-faint">/</span>
+          DENSE 384-D EMBEDDINGS
+        </div>
 
+        {error && (
+          <div className="mb-6 flex items-center justify-between gap-3 border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive rounded-md">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="size-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+            <button onClick={() => setError(null)} className="text-xs hover:underline cursor-pointer">
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Sub-Tab Navigation */}
+        <div className="mb-6 flex items-center gap-1 border-b border-border pb-3 text-xs font-mono">
+          <button
+            onClick={() => setTab("query")}
+            className={cn(
+              "px-3 py-1.5 rounded transition-colors",
+              tab === "query" ? "bg-accent text-primary font-semibold" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            RAG INFERENCE
+          </button>
+          <button
+            onClick={() => setTab("search")}
+            className={cn(
+              "px-3 py-1.5 rounded transition-colors",
+              tab === "search" ? "bg-accent text-primary font-semibold" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            VECTOR SEARCH
+          </button>
+          <button
+            onClick={() => setTab("documents")}
+            className={cn(
+              "px-3 py-1.5 rounded transition-colors",
+              tab === "documents" ? "bg-accent text-primary font-semibold" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            INDEXED CORPUS ({documents.length})
+          </button>
+        </div>
+
+        {/* Layout Grid */}
+        <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
+          {/* Main Area */}
+          <div className="space-y-6">
             {/* ── 1. RAG Query Tab ────────────────────────────────────── */}
             {tab === "query" && (
-              <div className="space-y-6 animate-fade-in">
-                <div>
-                  <h1 className="text-base font-bold text-white tracking-tight">
-                    Grounded Knowledge Query (RAG)
-                  </h1>
-                  <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-                    Retrieve relevant vector passages and synthesize a deterministic, grounded answer backed by cited sources.
-                  </p>
-                </div>
-
-                {/* Quick Presets */}
+              <div className="space-y-5">
+                {/* Presets */}
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mr-1">
-                    Presets:
-                  </span>
+                  <span className="font-mono text-[10px] uppercase text-muted-foreground">PRESETS:</span>
                   {QUERY_PRESETS.map((preset) => (
                     <button
                       key={preset}
                       onClick={() => handleQuery(preset)}
-                      className="text-left text-[11px] px-3 py-1 rounded-xl bg-slate-900/80 hover:bg-cyan-950/40 border border-white/10 hover:border-cyan-500/30 text-slate-300 hover:text-white transition-all cursor-pointer shadow-xs"
+                      className="text-left text-xs px-2.5 py-1 rounded border border-border bg-panel text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
                     >
                       {preset}
                     </button>
                   ))}
                 </div>
 
-                {/* Input box */}
-                <div className="rounded-2xl border border-white/[0.08] bg-slate-900/70 p-3 shadow-xl backdrop-blur-xl focus-within:border-cyan-500/50 transition-all">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={queryText}
-                      onChange={(e) => setQueryText(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleQuery()}
-                      placeholder="Ask a question across all indexed knowledge..."
-                      className="flex-1 bg-transparent px-3 py-2 text-xs text-white placeholder:text-slate-500 outline-none font-medium"
-                    />
-                    <ShimmerButton
-                      onClick={() => handleQuery()}
-                      loading={queryLoading}
-                      disabled={!queryText.trim()}
-                      variant="primary"
-                      size="md"
-                    >
-                      <Sparkles size={14} />
-                      <span>Query RAG</span>
-                    </ShimmerButton>
-                  </div>
+                {/* Input Bar */}
+                <div className="relative">
+                  <Search className="absolute left-3.5 top-3.5 size-4 text-muted-foreground" />
+                  <input
+                    value={queryText}
+                    onChange={(e) => setQueryText(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleQuery()}
+                    placeholder="Ask a question across all indexed knowledge..."
+                    className="h-11 w-full rounded border border-border bg-panel pl-10 pr-28 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
+                  />
+                  <button
+                    onClick={() => handleQuery()}
+                    disabled={queryLoading || !queryText.trim()}
+                    className="absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors flex items-center gap-1.5"
+                  >
+                    {queryLoading ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="size-3" />
+                    )}
+                    <span>Synthesize</span>
+                  </button>
                 </div>
 
                 {/* Results View */}
-                {queryResult && (
-                  <div className="space-y-4 animate-slide-up">
-                    {/* Meta bar */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] pb-3">
-                      <div className="flex items-center gap-2.5">
-                        <EvidenceBadge quality={queryResult.evidence_quality} showDescription />
-                        <span className="text-xs text-slate-400 font-mono">
-                          {queryResult.retrieval_count} sources retrieved
+                {queryResult ? (
+                  <div className="border border-border bg-panel p-6 space-y-4 rounded-md">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-primary">
+                          EVIDENCE: {queryResult.evidence_quality.toUpperCase()}
+                        </span>
+                        <span className="text-xs text-muted-foreground">·</span>
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {queryResult.retrieval_count} SOURCES · {formatDuration(queryResult.total_time_ms)}
                         </span>
                       </div>
-                      <div className="flex items-center gap-3 text-xs text-slate-400 font-mono">
-                        <span className="flex items-center gap-1">
-                          <Clock size={12} />
-                          {formatDuration(queryResult.total_time_ms)}
-                        </span>
-                        <span>·</span>
-                        <span className="text-cyan-400 font-bold">{queryResult.model_used}</span>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleCopyAnswer}
+                          className="p-1.5 rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
+                          title="Copy Answer"
+                        >
+                          {copiedAnswer ? <Check className="size-3 text-primary" /> : <Copy className="size-3" />}
+                        </button>
+                        <button
+                          onClick={handleExport}
+                          disabled={exportingDocx}
+                          className="p-1.5 rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
+                          title="Download DOCX"
+                        >
+                          <Download className="size-3" />
+                        </button>
                       </div>
                     </div>
 
-                    {/* Answer Card */}
-                    <SpotlightCard className="p-6 space-y-4" spotlightColor="rgba(6, 182, 212, 0.12)">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-white flex items-center gap-2">
-                          <Sparkles size={14} className="text-cyan-400" />
-                          <span>Synthesized Knowledge Response</span>
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={handleCopyAnswer}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] text-slate-400 hover:text-white bg-slate-800 border border-white/10 hover:border-cyan-500/30 transition-all cursor-pointer"
-                          >
-                            {copiedAnswer ? (
-                              <Check size={12} className="text-emerald-400" />
-                            ) : (
-                              <Copy size={12} />
-                            )}
-                            <span>{copiedAnswer ? "Copied" : "Copy"}</span>
-                          </button>
-                          <button
-                            onClick={handleExportDocx}
-                            disabled={exportingDocx}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] text-slate-400 hover:text-white bg-slate-800 border border-white/10 hover:border-cyan-500/30 transition-all cursor-pointer disabled:opacity-50"
-                          >
-                            <Download size={12} className="text-cyan-400" />
-                            <span>Export .DOCX</span>
-                          </button>
+                    <div className="text-xs leading-relaxed text-foreground whitespace-pre-wrap">
+                      {queryResult.answer}
+                    </div>
+
+                    {queryResult.citations && queryResult.citations.length > 0 && (
+                      <div className="pt-4 border-t border-border space-y-2">
+                        <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                          VERIFIED CITATIONS ({queryResult.citations.length})
                         </div>
-                      </div>
-
-                      <div className="text-xs leading-relaxed text-slate-200 whitespace-pre-wrap font-sans">
-                        {queryResult.answer}
-                      </div>
-                    </SpotlightCard>
-
-                    {/* Citations List */}
-                    {queryResult.citations.length > 0 && (
-                      <div className="space-y-3 pt-2">
-                        <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
-                          Grounding Evidence & Verification Citations ({queryResult.citations.length})
-                        </span>
-                        <div className="space-y-2">
-                          {queryResult.citations.map((cit, idx) => (
-                            <SourceCitation
-                              key={idx}
-                              citation={cit}
-                            />
+                        <div className="grid gap-2">
+                          {queryResult.citations.map((s, idx) => (
+                            <div key={idx} className="border border-border p-3 bg-muted/20 rounded text-xs space-y-1">
+                              <div className="flex items-center justify-between font-mono text-[10px] text-primary">
+                                <span>{s.document}</span>
+                                <span>SCORE: {s.relevance_score ? `${(s.relevance_score * 100).toFixed(1)}%` : "N/A"}</span>
+                              </div>
+                              <p className="text-muted-foreground line-clamp-3 text-[11px] leading-5">
+                                {s.chunk_id || "Grounded vector passage"}
+                              </p>
+                            </div>
                           ))}
                         </div>
                       </div>
                     )}
                   </div>
+                ) : !queryLoading && (
+                  <EmptyState
+                    icon={Database}
+                    title="No query executed"
+                    description="Evidence-backed results, source references, and retrieval scores will appear here when you query the knowledge base."
+                  />
                 )}
               </div>
             )}
 
-            {/* ── 2. Vector Search Tab ───────────────────────────────── */}
+            {/* ── 2. Vector Search Tab ─────────────────────────────────── */}
             {tab === "search" && (
-              <div className="space-y-6 animate-fade-in">
-                <div>
-                  <h1 className="text-base font-bold text-white tracking-tight">
-                    Neural Vector Similarity Search
-                  </h1>
-                  <p className="mt-1 text-xs text-slate-400 leading-relaxed">
-                    Perform cosine similarity search across local dense embeddings to inspect matched text chunks without LLM synthesis.
-                  </p>
+              <div className="space-y-4">
+                <div className="relative">
+                  <Search className="absolute left-3.5 top-3.5 size-4 text-muted-foreground" />
+                  <input
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                    placeholder="Search vector embeddings..."
+                    className="h-11 w-full rounded border border-border bg-panel pl-10 pr-24 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
+                  />
+                  <button
+                    onClick={handleSearch}
+                    disabled={searchLoading || !searchQuery.trim()}
+                    className="absolute right-1.5 top-1.5 bottom-1.5 px-3 rounded bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
+                  >
+                    {searchLoading ? <Loader2 className="size-3 animate-spin" /> : "Search"}
+                  </button>
                 </div>
 
-                {/* Search input */}
-                <div className="rounded-2xl border border-white/[0.08] bg-slate-900/70 p-3 shadow-xl backdrop-blur-xl focus-within:border-cyan-500/50 transition-all">
-                  <div className="flex items-center gap-2">
-                    <Search size={14} className="text-slate-400 ml-2" />
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                      placeholder="Enter search phrase to match vector embeddings..."
-                      className="flex-1 bg-transparent px-2 py-2 text-xs text-white placeholder:text-slate-500 outline-none font-medium"
-                    />
-                    <ShimmerButton
-                      onClick={handleSearch}
-                      loading={searchLoading}
-                      disabled={!searchQuery.trim()}
-                      variant="primary"
-                      size="md"
-                    >
-                      <span>Search Vectors</span>
-                    </ShimmerButton>
-                  </div>
-                </div>
-
-                {/* Results list */}
                 {searched && (
-                  <div className="space-y-3 animate-slide-up">
-                    <div className="flex items-center justify-between text-xs text-slate-400 border-b border-white/[0.08] pb-2 font-mono">
-                      <span>{searchResults.length} vector chunks matched</span>
-                      {searchTime !== null && <span>Search Latency: {formatDuration(searchTime)}</span>}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground font-mono">
+                      <span>{searchResults.length} matches found</span>
+                      {searchTime !== null && <span>Query completed in {searchTime.toFixed(1)}ms</span>}
                     </div>
 
-                    {searchResults.length === 0 ? (
-                      <div className="p-12 text-center rounded-2xl border border-dashed border-white/10 bg-slate-900/40">
-                        <Search size={22} className="text-slate-500 mx-auto mb-2 opacity-50" />
-                        <span className="text-xs font-bold text-white">
-                          No matching vectors found
-                        </span>
-                        <p className="text-[11px] text-slate-400 mt-1">
-                          Try adjusting search terms or verify indexed documents in the store tab.
-                        </p>
+                    {searchResults.length ? (
+                      <div className="border border-border divide-y divide-border bg-panel/30">
+                        {searchResults.map((item, idx) => (
+                          <div key={idx} className="p-4 space-y-1.5">
+                            <div className="flex items-center justify-between font-mono text-[10px] text-primary">
+                              <span>{item.filename} · Chunk {item.chunk_id}</span>
+                              <span>Score {(item.score * 100).toFixed(1)}%</span>
+                            </div>
+                            <p className="text-xs text-foreground leading-relaxed">
+                              {item.text}
+                            </p>
+                          </div>
+                        ))}
                       </div>
                     ) : (
-                      <div className="space-y-2.5">
-                        {searchResults.map((res, i) => (
-                          <SpotlightCard key={i} className="p-4 space-y-2" spotlightColor="rgba(6, 182, 212, 0.12)">
-                            <div className="flex items-center justify-between text-xs">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="font-bold text-white truncate max-w-sm">
-                                  {res.filename || res.document_id}
-                                </span>
-                                {res.section && (
-                                  <span className="rounded-md bg-slate-800 border border-white/10 px-1.5 py-0.5 text-[10px] font-mono text-slate-400 truncate max-w-[150px]">
-                                    {res.section}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="flex items-center gap-1 text-[11px] font-mono text-cyan-400 font-bold shrink-0">
-                                <span>{(res.score * 100).toFixed(1)}% match</span>
-                              </div>
-                            </div>
-                            <p className="text-xs leading-relaxed text-slate-300 font-mono line-clamp-3">
-                              {res.text}
-                            </p>
-                          </SpotlightCard>
-                        ))}
+                      <div className="p-8 text-center border border-dashed border-border text-xs text-muted-foreground">
+                        No vector matches found for your query.
                       </div>
                     )}
                   </div>
@@ -443,80 +409,81 @@ export default function KnowledgePage() {
               </div>
             )}
 
-            {/* ── 3. Indexed Documents Tab ───────────────────────────── */}
+            {/* ── 3. Indexed Corpus Tab ─────────────────────────────────── */}
             {tab === "documents" && (
-              <div className="space-y-6 animate-fade-in">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h1 className="text-base font-bold text-white tracking-tight">
-                      Indexed Knowledge Collections
-                    </h1>
-                    <p className="mt-1 text-xs text-slate-400">
-                      Persistent local vector index storing embedded document segments.
-                    </p>
-                  </div>
-                  <ShimmerButton
-                    onClick={fetchDocuments}
-                    loading={loadingDocs}
-                    variant="secondary"
-                    size="sm"
-                  >
-                    <RefreshCw size={12} className={cn(loadingDocs && "animate-spin-smooth")} />
-                    <span>Refresh Store</span>
-                  </ShimmerButton>
-                </div>
-
+              <div className="space-y-4">
                 {loadingDocs ? (
-                  <div className="flex flex-col items-center justify-center py-16 text-xs text-slate-400 gap-2">
-                    <Loader2 size={20} className="animate-spin-smooth text-cyan-400" />
-                    <span>Inspecting vector collections...</span>
+                  <div className="flex flex-col items-center justify-center border border-border bg-panel/35 py-16 text-xs text-muted-foreground gap-2">
+                    <Loader2 className="size-5 animate-spin text-primary" />
+                    <span>Loading indexed corpus...</span>
                   </div>
-                ) : documents.length === 0 ? (
-                  <div className="p-12 text-center rounded-2xl border border-dashed border-white/10 bg-slate-900/40">
-                    <Database size={24} className="text-cyan-400 mx-auto mb-2 opacity-60" />
-                    <h4 className="text-xs font-bold text-white">
-                      Vector store is empty
-                    </h4>
-                    <p className="text-[11px] text-slate-400 mt-1 max-w-sm mx-auto">
-                      Go to Document Intelligence and click &quot;Ingest to Vector Index&quot; to populate knowledge embeddings.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
+                ) : documents.length ? (
+                  <div className="border border-border bg-panel/30">
                     {documents.map((doc) => (
-                      <SpotlightCard key={doc.document_id} className="p-4" spotlightColor="rgba(6, 182, 212, 0.12)">
-                        <div className="flex items-center justify-between">
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <BookOpen size={14} className="text-cyan-400 shrink-0" />
-                              <h3 className="text-xs font-bold text-white truncate" title={doc.filename}>
-                                {doc.filename}
-                              </h3>
-                            </div>
-                            <div className="mt-1 flex items-center gap-3 text-[10px] text-slate-400 font-mono">
-                              <span>{doc.chunk_count} vector chunks</span>
-                              <span>·</span>
-                              <span>Indexed {formatRelativeTime(doc.ingested_at)}</span>
-                            </div>
+                      <div
+                        key={doc.document_id}
+                        className="flex items-center justify-between gap-4 border-b border-border px-4 py-4 last:border-b-0"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {doc.filename}
                           </div>
-
-                          <button
-                            onClick={() => handleDeleteDoc(doc.document_id)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
-                            title="Remove from vector index"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          <div className="mt-1 font-mono text-[10px] text-muted-foreground flex flex-wrap items-center gap-2">
+                            <span>{doc.chunk_count} chunks</span>
+                            <span>·</span>
+                            <span>{doc.file_type.toUpperCase()}</span>
+                            {doc.ingested_at && (
+                              <>
+                                <span>·</span>
+                                <span>Indexed {formatRelativeTime(doc.ingested_at)}</span>
+                              </>
+                            )}
+                          </div>
                         </div>
-                      </SpotlightCard>
+
+                        <button
+                          onClick={() => handleDelete(doc.document_id)}
+                          aria-label={`Remove ${doc.filename}`}
+                          className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
                     ))}
                   </div>
+                ) : (
+                  <EmptyState
+                    icon={Database}
+                    title="No indexed documents"
+                    description="Documents ingested from the library will appear here once converted to vector representations."
+                  />
                 )}
               </div>
             )}
           </div>
+
+          {/* Right Aside (matches reference) */}
+          <div className="space-y-4">
+            <div className="border border-border bg-panel p-5">
+              <div className="font-mono text-[10px] uppercase text-muted-foreground">INDEX STATUS</div>
+              <div className="mt-4 flex items-center gap-2">
+                <span className="size-2 rounded-full bg-primary" />
+                <span className="text-sm font-medium text-foreground">Operational</span>
+              </div>
+              <div className="mt-2 text-xs text-muted-foreground">
+                In-memory vector store backing local dense similarity search.
+              </div>
+            </div>
+
+            <div className="border border-border bg-panel p-5">
+              <div className="font-mono text-[10px] uppercase text-muted-foreground">EVIDENCE POLICY</div>
+              <p className="mt-3 text-xs leading-6 text-muted-foreground">
+                Results should be grounded in local documents with inspectable citations. No external lookups are permitted.
+              </p>
+            </div>
+          </div>
         </div>
-      </div>
+      </main>
     </AppShell>
   );
 }

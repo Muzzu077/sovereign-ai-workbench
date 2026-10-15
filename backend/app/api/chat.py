@@ -22,7 +22,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 class ChatMessage(BaseModel):
     role: str = Field(..., description="'user' or 'assistant'")
-    content: str = Field(..., description="Message content")
+    content: Any = Field(..., description="Message content: string or multimodal content list")
 
 
 class StreamChatRequest(BaseModel):

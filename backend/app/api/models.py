@@ -11,7 +11,7 @@ from typing import Any
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Request
 
-from app.models.base import GenerationRequest
+from app.models.base import GenerationRequest, ImageInput
 from app.models.registry import ModelRegistry
 
 router = APIRouter(prefix="/models", tags=["models"])
@@ -25,6 +25,7 @@ class ModelInferenceRequest(BaseModel):
     system_prompt: str | None = None
     max_tokens: int = 1024
     temperature: float = 0.7
+    images: list[ImageInput] | None = None
 
 
 class ModelInferenceResponse(BaseModel):
@@ -144,6 +145,7 @@ def model_inference(
         system_prompt=body.system_prompt,
         max_tokens=body.max_tokens,
         temperature=body.temperature,
+        images=body.images,
     )
     try:
         response = provider.generate(gen_req)

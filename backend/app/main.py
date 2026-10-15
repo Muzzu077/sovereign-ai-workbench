@@ -16,6 +16,7 @@ import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -158,7 +159,7 @@ def create_app() -> FastAPI:
     network_monitor = NetworkMonitor(
         configured_endpoints={
             **({"llm_server": str(settings.llm_base_url)} if settings.llm_enabled else {}),
-            "coder_server": str(settings.coder_base_url),
+            **({"coder_server": str(settings.coder_base_url)} if settings.coder_enabled else {}),
         }
     )
 
@@ -212,11 +213,13 @@ def create_app() -> FastAPI:
                 settings.llm_model_id,
                 settings.llm_model_path,
             )
+            has_vision = Path(settings.llm_mmproj_path).is_file() if hasattr(settings, "llm_mmproj_path") else False
             provider = LlamaCppProvider(
                 base_url=settings.llm_base_url,
                 model_id=settings.llm_model_id,
                 timeout=settings.llm_timeout,
                 model_path=settings.llm_model_path,
+                supports_vision=has_vision,
             )
             model_registry.register("general", provider)
             model_registry.register("local", DummyLocalModel())

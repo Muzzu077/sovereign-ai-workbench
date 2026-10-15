@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     llm_enabled: bool = True
 
     # --- Code generation LLM (second model) ---
+    coder_enabled: bool = True
     coder_base_url: str = "http://127.0.0.1:9090"
     coder_model_id: str = "qwen3-4b"
 

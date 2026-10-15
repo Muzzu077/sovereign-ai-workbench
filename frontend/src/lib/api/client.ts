@@ -429,7 +429,14 @@ export async function* streamApprovalWorkflow(
 // ---------------------------------------------------------------------------
 
 export async function* streamChat(
-  body: { messages: Array<{ role: string; content: string }>; max_tokens?: number; temperature?: number }
+  body: {
+    messages: Array<{
+      role: string;
+      content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
+    }>;
+    max_tokens?: number;
+    temperature?: number;
+  }
 ): AsyncGenerator<{ event: string; data: string }, void, unknown> {
   const url = `${BASE_URL}/chat/stream`;
   const res = await fetch(url, {

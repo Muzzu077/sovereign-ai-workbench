@@ -65,27 +65,25 @@ export default function ArtifactInspector({
   return (
     <aside
       className={cn(
-        "w-[380px] shrink-0 border-l border-[var(--color-wb-border)] bg-[var(--color-wb-surface)] flex flex-col h-full shadow-lg animate-fade-in z-20",
+        "w-[340px] shrink-0 border-l border-border bg-panel flex flex-col h-full z-20",
       )}
       aria-label="Artifact and Citation Inspector"
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-wb-border)] bg-[var(--color-wb-bg-inset)]/60">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-panel">
         <div className="flex items-center gap-2">
-          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-teal-500/10 text-teal-600 border border-teal-500/20">
+          <div className="flex h-6 w-6 items-center justify-center rounded border border-border bg-muted/30 text-primary">
             <BookOpen size={13} />
           </div>
-          <span className="text-xs font-bold text-[var(--color-wb-text)]">
-            Source Grounding Inspector
+          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            SOURCE GROUNDING
           </span>
         </div>
-
         <button
           onClick={onClose}
-          className="p-1 rounded-lg text-[var(--color-wb-text-muted)] hover:text-[var(--color-wb-text)] hover:bg-[var(--color-wb-surface-hover)] transition-colors cursor-pointer"
-          title="Close Inspector"
+          className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-panel-hover"
         >
-          <X size={14} />
+          <X size={15} />
         </button>
       </div>
 

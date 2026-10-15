@@ -317,7 +317,7 @@ export default function ChatMessage({
           </span>
         </div>
 
-        <div className="rounded-2xl rounded-tr-xs px-4 py-3 bg-[var(--color-wb-sidebar)] text-white text-xs leading-relaxed shadow-sm border border-stone-800">
+        <div className="rounded-md px-4 py-3 bg-panel text-foreground text-xs leading-relaxed border border-border">
           {content}
         </div>
 
@@ -348,8 +348,8 @@ export default function ChatMessage({
     <div className="flex gap-3 max-w-full group">
       {/* Avatar column */}
       <div className="shrink-0 mt-1">
-        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-teal-600 to-teal-800 border border-teal-400/30 text-white shadow-[0_0_12px_rgba(15,118,110,0.2)]">
-          <Sparkles size={15} />
+        <div className="flex h-8 w-8 items-center justify-center rounded border border-border bg-panel text-primary">
+          <Sparkles size={14} />
         </div>
       </div>
 

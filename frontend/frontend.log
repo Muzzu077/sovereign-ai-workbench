@@ -1,0 +1,8 @@
+▲ Next.js 16.3.5
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.8:3000
+✓ Ready in 301ms
+⚠ Warning: Next.js ignored package-lock.json in /home/muzzu because it is outside the current Git repository (/home/muzzu/Projects/sovereign-ai-workbench).
+ To use this directory, set `outputFileTracingRoot` in your Next.js config.
+
+✓ Running next.config.ts took 162ms

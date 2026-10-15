@@ -374,6 +374,11 @@ export interface ModelInferenceRequest {
   system_prompt?: string;
   max_tokens?: number;
   temperature?: number;
+  images?: Array<{
+    path?: string;
+    base64_data?: string;
+    media_type?: string;
+  }>;
 }
 
 export interface ModelInferenceResponse {

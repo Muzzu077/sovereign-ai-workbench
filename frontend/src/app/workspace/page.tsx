@@ -169,6 +169,7 @@ function WorkingIndicator() {
 
 export default function WorkspacePage() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => makeId());
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [sessions, setSessions] = useState<SavedSession[]>([]);
@@ -176,6 +177,63 @@ export default function WorkspacePage() {
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Load sessions from localStorage on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("saw_saved_sessions");
+      if (stored) {
+        const parsed: SavedSession[] = JSON.parse(stored);
+        setSessions(parsed);
+      }
+    } catch (e) {
+      console.error("Failed to load sessions from storage:", e);
+    }
+  }, []);
+
+  // Sync sessions whenever they change
+  const saveSessionsToStorage = (updated: SavedSession[]) => {
+    try {
+      localStorage.setItem("saw_saved_sessions", JSON.stringify(updated));
+    } catch (e) {
+      console.error("Failed to save sessions to storage:", e);
+    }
+  };
+
+  // Upsert current conversation into sessions
+  const upsertCurrentSession = (msgs: Message[], sessId: string) => {
+    if (msgs.length === 0) return;
+    const firstUserMsg = msgs.find((m) => m.role === "user");
+    const rawTitle = firstUserMsg ? firstUserMsg.content.trim() : "Conversation";
+    const title = rawTitle.length > 36 ? rawTitle.slice(0, 36) + "..." : rawTitle;
+
+    setSessions((prev) => {
+      const existingIdx = prev.findIndex((s) => s.id === sessId);
+      let updated: SavedSession[];
+      if (existingIdx >= 0) {
+        const existing = prev[existingIdx];
+        const updatedItem: SavedSession = {
+          ...existing,
+          title: existing.title || title,
+          timestamp: new Date().toISOString(),
+          messageCount: msgs.length,
+          messages: msgs,
+        };
+        updated = [updatedItem, ...prev.filter((_, i) => i !== existingIdx)];
+      } else {
+        const newItem: SavedSession = {
+          id: sessId,
+          title,
+          timestamp: new Date().toISOString(),
+          messageCount: msgs.length,
+          messages: msgs,
+        };
+        updated = [newItem, ...prev];
+      }
+      saveSessionsToStorage(updated);
+      return updated;
+    });
+  };
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -185,22 +243,28 @@ export default function WorkspacePage() {
   }, [messages, loading]);
 
   const handleNewChat = () => {
-    if (messages.length > 0) {
-      const firstMsg = messages.find((m) => m.role === "user");
-      const title = firstMsg ? firstMsg.content.slice(0, 36) + "..." : "Untitled Session";
-      setSessions((prev) => [
-        {
-          id: makeId(),
-          title,
-          timestamp: new Date().toISOString(),
-          messageCount: messages.length,
-          messages: [...messages],
-        },
-        ...prev,
-      ]);
-    }
+    const nextId = makeId();
+    setCurrentSessionId(nextId);
     setMessages([]);
     setSelectedCitation(null);
+  };
+
+  const handleSelectSession = (sess: SavedSession) => {
+    setCurrentSessionId(sess.id);
+    setMessages(sess.messages || []);
+    setSelectedCitation(null);
+  };
+
+  const handleDeleteSession = (e: React.MouseEvent, sessId: string) => {
+    e.stopPropagation();
+    setSessions((prev) => {
+      const updated = prev.filter((s) => s.id !== sessId);
+      saveSessionsToStorage(updated);
+      return updated;
+    });
+    if (currentSessionId === sessId) {
+      handleNewChat();
+    }
   };
 
   const handleExport = (format: "md" | "json") => {
@@ -443,25 +507,22 @@ export default function WorkspacePage() {
 
   return (
     <AppShell>
-      <div className="relative flex h-full overflow-hidden bg-[#070a12]">
-        {/* Ambient background dots */}
-        <BackgroundGrid variant="dots" opacity={0.04} />
-
+      <div className="relative flex h-full overflow-hidden bg-background">
         {/* ── Left Sessions Drawer (Collapsible) ───────────────────────── */}
         <div
           className={cn(
-            "border-r border-white/[0.08] bg-slate-950/80 backdrop-blur-2xl flex flex-col transition-all duration-300 z-20 shadow-2xl",
+            "border-r border-border bg-panel flex flex-col transition-all duration-200 z-20 shadow-xl",
             sessionDrawerOpen ? "w-72" : "w-0 overflow-hidden border-r-0",
           )}
         >
-          <div className="p-4 border-b border-white/[0.08] flex items-center justify-between">
-            <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <Clock size={13} className="text-cyan-400" />
+          <div className="p-4 border-b border-border flex items-center justify-between">
+            <span className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-2">
+              <Clock size={13} className="text-primary" />
               <span>Session History</span>
             </span>
             <button
               onClick={() => setSessionDrawerOpen(false)}
-              className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-panel-hover transition-colors"
             >
               <ChevronLeft size={14} />
             </button>
@@ -470,7 +531,7 @@ export default function WorkspacePage() {
           <div className="p-3 space-y-2.5">
             <button
               onClick={handleNewChat}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white text-xs font-bold shadow-[0_0_16px_rgba(6,182,212,0.3)] transition-all cursor-pointer"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold shadow-xs transition-all cursor-pointer"
             >
               <Plus size={14} strokeWidth={2.4} />
               <span>New Conversation</span>
@@ -478,62 +539,77 @@ export default function WorkspacePage() {
 
             {/* Session Search */}
             <div className="relative">
-              <SearchIcon size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+              <SearchIcon size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <input
                 type="text"
                 placeholder="Search discussions..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full rounded-xl bg-slate-900/90 border border-white/10 pl-8 pr-3 py-1.5 text-xs text-white placeholder:text-slate-500 outline-none focus:border-cyan-500/40 transition-colors font-sans"
+                className="w-full rounded-md bg-background border border-border pl-8 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary transition-colors font-sans"
               />
             </div>
           </div>
 
           <div className="flex-1 overflow-y-auto px-3 py-1 space-y-1.5">
-            {filteredSessions.map((sess) => (
-              <button
-                key={sess.id}
-                onClick={() => {
-                  if (sess.messages && sess.messages.length > 0) {
-                    setMessages(sess.messages);
-                  }
-                }}
-                className="w-full text-left p-3 rounded-xl hover:bg-slate-900/80 border border-transparent hover:border-cyan-500/20 transition-all group cursor-pointer"
-              >
-                <div className="text-xs font-semibold text-slate-200 group-hover:text-cyan-300 truncate">
-                  {sess.title}
+            {filteredSessions.map((sess) => {
+              const isActive = sess.id === currentSessionId;
+              return (
+                <div
+                  key={sess.id}
+                  onClick={() => handleSelectSession(sess)}
+                  className={cn(
+                    "w-full text-left p-3 rounded-md hover:bg-panel-hover border transition-all group cursor-pointer relative",
+                    isActive
+                      ? "bg-panel border-primary/50 text-foreground"
+                      : "border-transparent hover:border-border text-muted-foreground",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="text-xs font-medium text-foreground group-hover:text-primary truncate flex-1">
+                      {sess.title}
+                    </div>
+                    <button
+                      onClick={(e) => handleDeleteSession(e, sess.id)}
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:text-destructive hover:bg-destructive/10 rounded transition-all"
+                      title="Delete session"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground mt-1 font-mono flex items-center justify-between">
+                    <span>{new Date(sess.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    <span className="bg-background px-1.5 py-0.5 rounded border border-border">
+                      {sess.messageCount} msgs
+                    </span>
+                  </div>
                 </div>
-                <div className="text-[10px] text-slate-500 mt-1 font-mono flex items-center justify-between">
-                  <span>{sess.timestamp}</span>
-                  <span className="bg-slate-800/80 px-1.5 py-0.2 rounded border border-white/5">{sess.messageCount} msgs</span>
-                </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
 
-          <div className="p-3.5 border-t border-white/[0.08] bg-slate-950/90 text-[10px] font-mono text-slate-400 flex items-center justify-between">
+          <div className="p-3.5 border-t border-border bg-panel text-[10px] font-mono text-muted-foreground flex items-center justify-between">
             <span>Storage: SQLite WAL</span>
-            <span className="text-emerald-400 font-bold">100% Encrypted Local</span>
+            <span className="text-primary font-semibold">100% Encrypted Local</span>
           </div>
         </div>
 
         {/* ── Center Main Workspace Canvas ────────────────────────────── */}
         <div className="relative flex flex-1 flex-col min-w-0 h-full overflow-hidden">
           {/* Top Canvas Control Bar */}
-          <div className="flex items-center justify-between px-6 py-2.5 border-b border-white/[0.08] bg-slate-950/60 backdrop-blur-xl z-10">
+          <div className="flex items-center justify-between px-8 py-3 border-b border-border bg-panel/50 backdrop-blur-md z-10">
             <div className="flex items-center gap-2.5">
               <button
                 onClick={() => setSessionDrawerOpen((v) => !v)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-white/10 bg-slate-900/80 text-xs font-semibold text-slate-300 hover:bg-slate-800 hover:text-white transition-all cursor-pointer shadow-xs"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border bg-panel text-xs font-semibold text-muted-foreground hover:bg-panel-hover hover:text-foreground transition-all cursor-pointer shadow-xs"
                 title="Toggle sessions list"
               >
-                <PanelLeft size={13} className="text-cyan-400" />
+                <PanelLeft size={13} className="text-primary" />
                 <span>{sessionDrawerOpen ? "Hide Sessions" : "Sessions"}</span>
               </button>
 
               <button
                 onClick={handleNewChat}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:bg-slate-800/80 hover:text-white transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-semibold text-muted-foreground hover:bg-panel hover:text-foreground transition-colors cursor-pointer"
               >
                 <Plus size={13} />
                 <span>New Thread</span>
@@ -546,25 +622,25 @@ export default function WorkspacePage() {
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => handleExport("md")}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/30 text-[11px] font-semibold transition-all cursor-pointer shadow-xs"
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-panel border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 text-[11px] font-semibold transition-all cursor-pointer shadow-xs"
                     title="Export conversation as Markdown"
                   >
-                    <Download size={12} className="text-cyan-400" />
+                    <Download size={12} className="text-primary" />
                     <span>Markdown</span>
                   </button>
                   <button
                     onClick={() => handleExport("json")}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900 border border-white/10 text-slate-300 hover:text-white hover:border-cyan-500/30 text-[11px] font-semibold transition-all cursor-pointer shadow-xs"
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-panel border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 text-[11px] font-semibold transition-all cursor-pointer shadow-xs"
                     title="Export conversation as JSON"
                   >
-                    <FileText size={12} className="text-teal-400" />
+                    <FileText size={12} className="text-primary" />
                     <span>JSON</span>
                   </button>
                 </div>
               )}
 
               {/* Air-Gapped Thread Badge */}
-              <div className="flex items-center gap-1.5 text-emerald-400 font-bold bg-emerald-500/10 px-2.5 py-1 rounded-xl border border-emerald-500/30 font-mono text-[10px] tracking-wider uppercase">
+              <div className="flex items-center gap-1.5 text-emerald-400 font-bold bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/30 font-mono text-[10px] tracking-wider uppercase">
                 <Shield size={12} strokeWidth={2.4} />
                 <span>AIR-GAPPED THREAD</span>
               </div>
@@ -575,84 +651,63 @@ export default function WorkspacePage() {
           <div ref={scrollRef} className="flex-1 overflow-y-auto">
             {isEmpty ? (
               /* ── Empty State Hero ─────────────────────────────────────── */
-              <div className="flex min-h-full flex-col items-center justify-center px-6 py-10">
-                <div className="w-full max-w-3xl space-y-8">
+              <div className="flex min-h-full flex-col justify-center px-6 py-12 lg:py-16">
+                <div className="mx-auto w-full max-w-[760px] space-y-8">
                   {/* Hero Header */}
-                  <div className="text-center">
-                    <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500/20 to-indigo-500/10 border border-cyan-500/30 mb-4 shadow-[0_0_24px_rgba(6,182,212,0.2)]">
-                      <Sparkles size={26} className="text-cyan-400" />
+                  <div>
+                    <div className="mb-9 flex items-center gap-3">
+                      <div className="grid size-10 place-items-center rounded border border-primary/30 bg-primary/10">
+                        <img src="/sovereign-mark.svg" className="size-7" alt="Sovereign" />
+                      </div>
+                      <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-primary">
+                        LOCAL-FIRST · EVIDENCE-DRIVEN
+                      </div>
                     </div>
-                    <h1 className="text-2xl font-extrabold tracking-tight text-white">
-                      <DecryptedText
-                        text="Sovereign AI Intelligence Core"
-                        speed={30}
-                        maxIterations={12}
-                      />
-                    </h1>
-                    <p className="mt-2 text-xs text-slate-400 max-w-lg mx-auto leading-relaxed">
-                      Zero telemetry, 100% air-gapped local inference. Query vector stores, extract compliance risks, and execute sandboxed agents.
+                    <h2 className="max-w-[650px] text-[clamp(2.2rem,4vw,3.7rem)] font-semibold leading-[1.12] text-foreground">
+                      Your work stays<br />
+                      <span className="text-primary">within your walls.</span>
+                    </h2>
+                    <p className="mt-5 max-w-[560px] text-[15px] leading-7 text-muted-foreground">
+                      A private workspace for documents, local knowledge, models, and agentic workflows. Choose a mode to begin preparing your task.
                     </p>
-
-                    {/* Capability Tags */}
-                    <div className="flex flex-wrap items-center justify-center gap-2 mt-4">
-                      {CAPABILITIES.map((cap) => {
-                        const Icon = cap.icon;
-                        return (
-                          <span
-                            key={cap.text}
-                            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold text-slate-300 bg-slate-900/80 border border-white/10 shadow-xs"
-                          >
-                            <Icon size={12} className="text-cyan-400" />
-                            <span>{cap.text}</span>
-                          </span>
-                        );
-                      })}
-                    </div>
                   </div>
 
                   {/* Hero Composer Island */}
-                  <div className="shadow-2xl rounded-2xl">
+                  <div className="rounded-xl border border-border bg-panel p-2 shadow-sm">
                     <Composer onSend={handleSend} disabled={loading} hero />
                   </div>
 
                   {/* Categorized Capability Starters */}
                   <div className="space-y-3">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 block text-center">
-                      Quick Capability Starters
-                    </span>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                    <div className="border-b border-border pb-3 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
+                      START WITH A WORKFLOW
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       {STARTER_CATEGORIES.map((cat) => {
                         const Icon = cat.icon;
-                        return (
-                          <div
-                            key={cat.title}
-                            className="p-4 rounded-2xl border border-white/[0.08] bg-slate-900/60 backdrop-blur-xl space-y-3 shadow-md hover:border-cyan-500/30 transition-all"
-                          >
-                            <div className="flex items-center gap-2 text-xs font-bold text-white">
-                              <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                                <Icon size={13} />
-                              </div>
-                              <span>{cat.title}</span>
-                            </div>
+                        const topItem = cat.items[0];
+  // Persist messages whenever they change
+  useEffect(() => {
+    if (messages.length > 0) {
+      upsertCurrentSession(messages, currentSessionId);
+    }
+  }, [messages, currentSessionId]);
 
-                            <div className="space-y-2">
-                              {cat.items.map((item) => (
-                                <button
-                                  key={item.label}
-                                  onClick={() => handleSend(item.prompt, [], item.mode)}
-                                  className="w-full text-left p-2.5 rounded-xl bg-slate-950/80 hover:bg-cyan-950/30 border border-white/5 hover:border-cyan-500/30 text-xs text-slate-300 hover:text-white transition-all group cursor-pointer"
-                                >
-                                  <div className="font-semibold flex items-center justify-between text-[11px]">
-                                    <span className="group-hover:text-cyan-300">{item.label}</span>
-                                    <ArrowRight size={11} className="opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all text-cyan-400" />
-                                  </div>
-                                  <p className="text-[10px] text-slate-400 line-clamp-2 mt-1 leading-relaxed">
-                                    {item.prompt}
-                                  </p>
-                                </button>
-                              ))}
+  return (
+                          <button
+                            key={cat.title}
+                            onClick={() => handleSend(topItem.prompt, [], topItem.mode)}
+                            className="group h-auto min-h-[132px] flex flex-col items-start justify-start rounded-md border border-border bg-panel p-4 text-left shadow-none hover:border-primary/50 hover:bg-panel-hover transition-colors cursor-pointer"
+                          >
+                            <div className="mb-5 flex w-full items-center justify-between">
+                              <Icon className="size-5 text-primary" strokeWidth={1.6} />
+                              <ArrowRight className="size-4 text-faint transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
                             </div>
-                          </div>
+                            <span className="text-sm font-medium text-foreground">{cat.title}</span>
+                            <span className="mt-1.5 line-clamp-2 text-xs font-normal leading-5 text-muted-foreground">
+                              {topItem.prompt}
+                            </span>
+                          </button>
                         );
                       })}
                     </div>
@@ -697,7 +752,7 @@ export default function WorkspacePage() {
 
           {/* ── Bottom Floating Composer (in conversation mode) ────────── */}
           {!isEmpty && (
-            <div className="p-4 border-t border-white/[0.08] bg-slate-950/80 backdrop-blur-xl z-10">
+            <div className="p-4 border-t border-border bg-panel/75 backdrop-blur-md z-10">
               <div className="mx-auto max-w-3xl">
                 <Composer onSend={handleSend} disabled={loading} />
               </div>
